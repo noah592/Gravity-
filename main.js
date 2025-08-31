@@ -2,7 +2,7 @@
   // --- Config ---
   const WORLD_SIZE = 1000000;          // 10k x 10k world
   let   DENSITY = 0.0085;            // fraction of filled cells (0..1), mutable via HUD
-  const D_MIN = 1e-7, D_MAX = 0.1;   // density clamps
+  const D_MIN = 1e-7, D_MAX = 0.03;   // density clamps
   const D_STEP = 1.1;                // small step (×/÷) for density buttons
 
   const ZOOM_STEP = 1.1;             // wheel zoom factor per notch
@@ -18,7 +18,7 @@
   const MAX_DT = 1 / 60;             // maximum physics dt (seconds)
 
   // Barnes–Hut (quadtree) parameters
-  const THETA = 1.1;                 // opening angle (smaller = more accurate)
+  const THETA = 3;                 // opening angle (smaller = more accurate)
   const LEAF_CAPACITY = 1;           // (kept simple)
 
   // Visual base radius; final rWorld = BASE_R_WORLD * sizeMul
@@ -705,4 +705,3 @@
     requestAnimationFrame(tick);
   })();
 })();
-
