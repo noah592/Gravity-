@@ -18,7 +18,7 @@
   const MAX_DT = 1 / 60;             // maximum physics dt (seconds)
 
   // Barnes–Hut (quadtree) parameters
-  const THETA = 0.7;                 // opening angle (smaller = more accurate)
+  const THETA = 1.1;                 // opening angle (smaller = more accurate)
   const LEAF_CAPACITY = 1;           // (kept simple)
 
   // Visual base radius; final rWorld = BASE_R_WORLD * sizeMul
@@ -40,12 +40,12 @@
   const BIAS_STEP = 1.1;             // small step (×/÷)
 
   // Initial velocity upper bound (for first activation only)
-  let   V0_MAX = 10.0;               // default V0 cap (units/s), mutable
+  let   V0_MAX = 7.0;               // default V0 cap (units/s), mutable
   const V0_MIN = 0.1, V0_MAX_CAP = 5000.0;
   const V0_STEP = 1.1;               // small step (×/÷)
 
   // Manual control (thrusters) — acceleration magnitude in units/s^2
-  const CONTROL_ACCEL = 10.0;
+  const CONTROL_ACCEL = 25.0;
 
   // --- Canvas / HUD ---
   const canvas = document.getElementById('view');
@@ -705,3 +705,4 @@
     requestAnimationFrame(tick);
   })();
 })();
+
