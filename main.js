@@ -18,7 +18,7 @@
   const MAX_DT = 1 / 60;             // maximum physics dt (seconds)
 
   // Barnes–Hut (quadtree) parameters
-  const THETA = 3;                 // opening angle (smaller = more accurate)
+  const THETA = 10;                 // opening angle (smaller = more accurate)
   const LEAF_CAPACITY = 1;           // (kept simple)
 
   // Visual base radius; final rWorld = BASE_R_WORLD * sizeMul
