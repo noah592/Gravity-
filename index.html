@@ -53,14 +53,54 @@
       <span class="hint">(k=1 uniform; k&gt;1 → smaller)</span>
     </div>
 
+    <!-- Crush controls -->
     <div class="row">
-      <span>Follow: <span id="followVal">Off</span></span>
-      <span class="hint">(press F to toggle; follows selected body)</span>
+      <span>Crush threshold M<sub>C</sub>: <span id="mcVal"></span></span>
+      <button id="mcMinus" title="Lower crush threshold">−</button>
+      <button id="mcPlus"  title="Raise crush threshold">+</button>
+    </div>
+    <div class="row">
+      <span>Crush slope K: <span id="kVal"></span></span>
+      <button id="kMinus" title="Lower crush slope">−</button>
+      <button id="kPlus"  title="Raise crush slope">+</button>
+    </div>
+
+    <!-- Banded velocity add -->
+    <div class="row">
+      <span>Band height (units): <span id="bandVal"></span></span>
+      <button id="bandMinus" title="Smaller bands">−</button>
+      <button id="bandPlus"  title="Larger bands">+</button>
+    </div>
+    <div class="row">
+      <span>V<sub>bias</sub> add (units/s): <span id="vbiasVal"></span></span>
+      <button id="vbiasMinus" title="Lower bias speed">−</button>
+      <button id="vbiasPlus"  title="Raise bias speed">+</button>
+    </div>
+
+    <!-- Collision response -->
+    <div class="row">
+      <span>Merge: <span id="mergeVal">On</span></span>
+      <button id="mergeToggle" title="Toggle merging">Toggle</button>
+      <span class="sep">|</span>
+      <span>Restitution e: <span id="restVal"></span></span>
+      <button id="restMinus" title="Lower restitution (less bouncy)">−</button>
+      <button id="restPlus"  title="Raise restitution (more bouncy)">+</button>
+      <span class="sep">|</span>
+      <span>Friction μ: <span id="muVal"></span></span>
+      <button id="muMinus" title="Lower tangential friction">−</button>
+      <button id="muPlus"  title="Raise tangential friction">+</button>
+    </div>
+
+    <!-- Sticky-by-EMA merging -->
+    <div class="row">
+      <span>Sticky EMA thr (coll/s): <span id="stickyVal"></span></span>
+      <button id="stickyMinus" title="Lower sticky threshold">−</button>
+      <button id="stickyPlus"  title="Raise sticky threshold">+</button>
     </div>
 
     <div class="row">
-      <span>Selected EMA coll/s: <span id="emaCollVal">—</span></span>
-      <span class="hint">(click a body)</span>
+      <span>Follow: <span id="followVal">Off</span></span>
+      <span class="hint">(press F to toggle; follows selected body)</span>
     </div>
 
     <div class="row">

@@ -1,75 +1,90 @@
 (() => {
-/* =============================[ Section 1: Config & Globals ]============================= */
-  // --- Config ---
-  const WORLD_SIZE = 1_000_000;       // 1,000,000 x 1,000,000 world
-  let   DENSITY = 0.0045;             // fraction of filled cells (0..1), mutable via HUD
-  const D_MIN = 1e-7, D_MAX = 0.03;   // density clamps
-  const D_STEP = 1.1;                 // small step (×/÷) for density buttons
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 1) Config & constants
+  // ─────────────────────────────────────────────────────────────────────────────
+  const WORLD_SIZE = 1_000_000;
+  let   DENSITY = 0.0045;
+  const D_MIN = 1e-7, D_MAX = 0.03;
+  const D_STEP = 1.1;
 
-  const ZOOM_STEP = 1.1;              // wheel zoom factor per notch
-  const MAX_SCALE = 200;              // max pixels per world unit (max zoom-in)
-  const MIN_SCALE = 1;                // min pixels per world unit (max zoom-out)
+  const ZOOM_STEP = 1.1;
+  const MAX_SCALE = 200;
+  const MIN_SCALE = 1;
 
-  // Gravity / physics knobs (world units: 1 unit = 1 grid cell)
-  const GRAVITY_ZOOM_GATE = 1;        // simulate when scale >= this (px/unit)
-  let   G = 15;                       // gravitational constant (mutable)
-  const G_MIN = 1e-6, G_MAX = 1e6;    // HUD bounds
-  const G_STEP = 1.1;                 // small step (×/÷) for G buttons
-  const SOFTENING2 = 0.15;            // epsilon^2 to avoid singularities
-  const MAX_DT = 1 / 60;              // maximum physics dt (seconds)
+  // Gravity / physics
+  const GRAVITY_ZOOM_GATE = 1;
+  let   G = 15;
+  const G_MIN = 1e-6, G_MAX = 1e6;
+  const G_STEP = 1.1;
+  const SOFTENING2 = 0.15;
+  const MAX_DT = 1 / 60;
 
-  // Barnes–Hut (quadtree) parameters
-  const THETA = 1.0;                  // opening angle (smaller = more accurate)
-  const LEAF_CAPACITY = 1;
+  // Barnes–Hut
+  const THETA = 1.0;
+  const LEAF_CAPACITY = 1; // (kept for reference; current insert splits immediately)
 
-  // Visual base radius; final rWorld = BASE_R_WORLD * sizeFactor
+  // Visual base radius; baseline r = BASE_R_WORLD * sqrt(m)
   const BASE_R_WORLD = 0.45;
 
   // Size variation (deterministic per cell)
-  let   SIZE_VAR_MIN = 0.31 / BASE_R_WORLD;     // min radius = 0.31 units
-  let   SIZE_VAR_MAX = 1.50 / BASE_R_WORLD;     // max radius = 1.50 units
-  const S_MIN_MIN = 0.05 / BASE_R_WORLD;        // floor (0.05 u)
-  const S_MIN_MAX = 15.0 / BASE_R_WORLD;        // ceiling for min
-  const S_MAX_MIN = 0.1  / BASE_R_WORLD;        // floor for max
-  const S_MAX_MAX = 20.0 / BASE_R_WORLD;        // ceiling for max
-  const S_STEP    = 1.1;                        // small step (×/÷) for size buttons
+  let   SIZE_VAR_MIN = 0.31 / BASE_R_WORLD;
+  let   SIZE_VAR_MAX = 1.50 / BASE_R_WORLD;
+  const S_MIN_MIN = 0.05 / BASE_R_WORLD;
+  const S_MIN_MAX = 15.0 / BASE_R_WORLD;
+  const S_MAX_MIN = 0.1  / BASE_R_WORLD;
+  const S_MAX_MAX = 20.0 / BASE_R_WORLD;
+  const S_STEP    = 1.1;
 
-  let   SIZE_BIAS = 7.0;                        // default bias k (>1 = smaller)
+  let   SIZE_BIAS = 7.0;
   const BIAS_MIN = 0.2, BIAS_MAX = 10.0;
-  const BIAS_STEP = 1.1;                        // small step (×/÷)
+  const BIAS_STEP = 1.1;
 
-  // Initial velocity upper bound (for first activation only)
-  let   V0_MAX = 7.0;                           // V0 cap (units/s), mutable
+  // Initial velocity cap (spawn-time only)
+  let   V0_MAX = 7.0;
   const V0_MIN = 0.1, V0_MAX_CAP = 5000.0;
-  const V0_STEP = 1.1;                          // small step (×/÷)
+  const V0_STEP = 1.1;
 
-  // Manual control (thrusters) — acceleration magnitude in units/s^2
-  const CONTROL_ACCEL = 25.0;
+  // Spawn-time horizontal velocity band bias (kept from prior version)
+  let   VBIAS_BAND_H = 250;    // world units per band (defaults you requested earlier)
+  let   VBIAS_ADD    = 2.0;    // added vx amplitude (units/s)
 
-  // Picking: minimum clickable area and derived radius (world units)
-  const MIN_CLICK_AREA = 5;                               // units^2
+  // Linear “crush” density rule (kept; safe defaults)
+  let   CRUSH_K  = 0.0001;     // slope after threshold
+  let   CRUSH_MC = 300;        // mass where crush starts
+  const CRUSH_K_MIN=0, CRUSH_K_MAX=1;
+  const CRUSH_MC_MIN=0, CRUSH_MC_MAX=1e6;
+
+  // Merge & collision response
+  let   MERGE_ON    = true;    // HUD toggle should control this if present
+  let   STICKY_THR  = 800;     // EMA collisions/sec threshold
+  let   REST_E      = 0.2;     // coefficient of restitution
+  let   FRICTION_MU = 0.15;    // tangential (Coulomb) friction at contact
+  const STICKY_STEP = 1.2;     // generic steps for +/- buttons if present
+  const REST_STEP   = 1.1;
+  const FRICT_STEP  = 1.1;
+
+  // EMA smoothing for collisions/sec
+  const EMA_TAU = 0.35; // seconds (time-constant)
+
+  // Picking
+  const MIN_CLICK_AREA = 5;
   const MIN_CLICK_RADIUS = Math.sqrt(MIN_CLICK_AREA / Math.PI);
 
-  // Collision system knobs (merge toggle, restitution, friction μ)
-  let MERGE_ENABLED = true;                   // HUD toggle
-  let RESTITUTION = 0.85;                     // e in [0, 1.5] reasonable
-  let FRICTION_MU = 0.30;                     // μ in [0, 2]
-
-  const E_MIN = 0.0, E_MAX = 1.5, E_STEP = 1.1;
-  const MU_MIN = 0.0, MU_MAX = 2.0, MU_STEP = 1.1;
-
-  // --- Spatial hashing for collisions (Option A) ---
-  const BUCKET_SIZE = 2.0;                  // S (world units per grid cell)
+  // Spatial hashing for collisions (multi-bucket with canonical bucket)
+  const BUCKET_SIZE = 2.0;
   const MAX_CX = Math.floor(WORLD_SIZE / BUCKET_SIZE);
   const MAX_CY = Math.floor(WORLD_SIZE / BUCKET_SIZE);
-  const BUCKET_STRIDE = 2_000_000;          // for numeric composite keys
+  const BUCKET_STRIDE = 2_000_000;
   const bkKey = (cx, cy) => cx * BUCKET_STRIDE + cy;
   const clampCx = (cx) => Math.min(MAX_CX, Math.max(0, cx));
   const clampCy = (cy) => Math.min(MAX_CY, Math.max(0, cy));
 
-  // --- Canvas / HUD ---
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 2) Canvas / HUD lookups (all guarded)
+  // ─────────────────────────────────────────────────────────────────────────────
   const canvas = document.getElementById('view');
   const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+
   const hudZ = document.getElementById('zv');
   const hudV = document.getElementById('vv');
   const perfVal = document.getElementById('perfVal');
@@ -100,22 +115,41 @@
 
   const followVal = document.getElementById('followVal');
 
-  // New HUD handles for merge/e/μ
-  const mergeVal = document.getElementById('mergeVal');
-  const mergeToggleBtn = document.getElementById('mergeToggle');
+  // Optional HUD items (kept if present; harmless if absent)
+  const mergeVal      = document.getElementById('mergeVal');
+  const mergeToggle   = document.getElementById('mergeToggle');
+  const stickyVal     = document.getElementById('stickyVal');
+  const stickyMinus   = document.getElementById('stickyMinus');
+  const stickyPlus    = document.getElementById('stickyPlus');
+  const restVal       = document.getElementById('restVal');
+  const restMinus     = document.getElementById('restMinus');
+  const restPlus      = document.getElementById('restPlus');
+  const muVal         = document.getElementById('muVal');
+  const muMinus       = document.getElementById('muMinus');
+  const muPlus        = document.getElementById('muPlus');
 
-  const eVal = document.getElementById('eVal');
-  const eMinusBtn = document.getElementById('eMinus');
-  const ePlusBtn  = document.getElementById('ePlus');
+  const mcVal         = document.getElementById('mcVal');
+  const mcMinus       = document.getElementById('mcMinus');
+  const mcPlus        = document.getElementById('mcPlus');
+  const kVal          = document.getElementById('kVal');
+  const kMinus        = document.getElementById('kMinus');
+  const kPlus         = document.getElementById('kPlus');
 
-  const muVal = document.getElementById('muVal');
-  const muMinusBtn = document.getElementById('muMinus');
-  const muPlusBtn  = document.getElementById('muPlus');
+  const bandVal       = document.getElementById('bandVal');
+  const bandMinus     = document.getElementById('bandMinus');
+  const bandPlus      = document.getElementById('bandPlus');
+  const vbiasVal      = document.getElementById('vbiasVal');
+  const vbiasMinus    = document.getElementById('vbiasMinus');
+  const vbiasPlus     = document.getElementById('vbiasPlus');
 
-  // --- View state ---
+  const emaVal        = document.getElementById('emaVal');     // selected body's EMA CPS (optional)
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 3) Viewport state & helpers
+  // ─────────────────────────────────────────────────────────────────────────────
   let scale = 2;      // starting zoom
-  let viewX = 0;      // world x at screen left
-  let viewY = 0;      // world y at screen top
+  let viewX = 0;
+  let viewY = 0;
 
   function viewportWorldWidth ()  { return canvas.width  / scale; }
   function viewportWorldHeight()  { return canvas.height / scale; }
@@ -129,36 +163,29 @@
     viewY = Math.min(Math.max(0, viewY), maxY);
   }
 
-/* ==========================[ Section 2: Hashing & Utilities ]========================== */
-  // --- Hashing ---
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 4) Hashing / randomness helpers
+  // ─────────────────────────────────────────────────────────────────────────────
   function hash2D_u32(x, y) {
     let n = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263);
     n = Math.imul(n ^ (n >>> 13), 1274126177);
-    return (n ^ (n >>> 16)) >>> 0; // uint32
+    return (n ^ (n >>> 16)) >>> 0;
   }
-  function hash01(x, y) { return hash2D_u32(x, y) / 4294967296; } // [0,1)
+  function hash01(x, y) { return hash2D_u32(x, y) / 4294967296; }
 
-  // Numeric cell key (no strings) for spawned cells
-  function nkey(x, y) { return x * 1_000_000 + y; } // safe (<=1e12)
+  function nkey(x, y) { return x * 1_000_000 + y; }
 
-  // Density threshold for integer compare
   let DENSITY_THR = Math.floor(DENSITY * 4294967296);
 
   function sizeMulAt(x, y) {
     const u = hash01(x + 9173, y + 12345);
-    const ub = Math.pow(u, SIZE_BIAS); // bias toward small when k>1
+    const ub = Math.pow(u, SIZE_BIAS);
     return SIZE_VAR_MIN + (SIZE_VAR_MAX - SIZE_VAR_MIN) * ub;
   }
 
-  // Formatting helpers
-  function fmtG(g) { return (g >= 0.001 && g < 1000) ? g.toFixed(3) : g.toExponential(2); }
-  function fmtV0(x) { return (x < 10) ? x.toFixed(2) : (x < 1000 ? x.toFixed(1) : x.toExponential(1)); }
-  function fmtR(valUnits) { return valUnits.toFixed(valUnits < 10 ? 2 : 1); }
-  function fmtDensity(d) { return d < 0.001 ? d.toExponential(2) : d.toFixed(5); }
-  function fmtBias(k) { return k.toFixed(2); }
-  function fmt01(x) { return x.toFixed(2); } // generic formatter for [0, ~] params
-
-/* =====================[ Section 3: Render / Simulation Scheduling ]==================== */
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 5) Render/sim scheduling
+  // ─────────────────────────────────────────────────────────────────────────────
   let needsRender = false;
   function requestRender() {
     if (!needsRender) {
@@ -167,30 +194,30 @@
     }
   }
 
-  // Persistent universe state
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 6) Persistent state (bodies & cells)
+  // ─────────────────────────────────────────────────────────────────────────────
   /**
-   * bodies: Map from body-id string -> body
-   * body.sources: array of numeric cell keys that contributed to this body (for consumedCells)
+   * Body fields:
+   *  id, x, y, vx, vy, m, rWorld, sources[], emaCps, collCount
    */
-  /** @type {Map<string, {id:string,x:number,y:number,vx:number,vy:number,m:number,rWorld:number,sources:number[]}>} */
+  /** @type {Map<string, {id:string,x:number,y:number,vx:number,vy:number,m:number,rWorld:number,sources:number[], emaCps:number, collCount:number}>} */
   const bodies = new Map();
+  const activatedCells = new Set();
+  const consumedCells  = new Set();
 
-  // Activated/consumed cells tracked with numeric keys (no strings)
-  const activatedCells = new Set(); // Set<number>
-  const consumedCells  = new Set(); // Set<number>
-
-  let lastSimTime = null;   // for physics dt
-  let lastFrameTime = null; // for UI/control dt
-  let mergeIdCounter = 1;   // for merged-body IDs
+  let lastSimTime = null;
+  let lastFrameTime = null;
+  let mergeIdCounter = 1;
 
   // Perf metrics (ms)
-  let lastGravMs = 0.0;      // tree build + force accumulation
-  let lastSpawnMs = 0.0;     // visible-cell spawning pass (delta stripes/rings)
-  let lastCollideMs = 0.0;   // bucket build + collision checks/merges/impulses
-  let lastIntegrateMs = 0.0; // integration loop only
-  let lastRenderMs = 0.0;    // canvas drawing (fill + stroke)
-  let lastTotalMs = 0.0;     // full render() duration
-  let hudCounter = 0;        // throttle HUD updates
+  let lastGravMs = 0.0;
+  let lastSpawnMs = 0.0;
+  let lastCollideMs = 0.0;
+  let lastIntegrateMs = 0.0;
+  let lastRenderMs = 0.0;
+  let lastTotalMs = 0.0;
+  let hudCounter = 0;
 
   // Selection & control
   let selectedId = null;
@@ -199,25 +226,50 @@
 
   function simActive() { return scale >= GRAVITY_ZOOM_GATE; }
 
+  function fmtG(g) { return (g >= 0.001 && g < 1000) ? g.toFixed(3) : g.toExponential(2); }
+  function fmtV0(x) { return (x < 10) ? x.toFixed(2) : (x < 1000 ? x.toFixed(1) : x.toExponential(1)); }
+  function fmtR(valUnits) { return valUnits.toFixed(valUnits < 10 ? 2 : 1); }
+  function fmtDensity(d) { return d < 0.001 ? d.toExponential(2) : d.toFixed(5); }
+  function fmtBias(k) { return k.toFixed(2); }
+  function fmtBool(b) { return b ? 'On' : 'Off'; }
+  function fmtFloat(x) { return (Math.abs(x) < 0.01 || Math.abs(x) >= 1000) ? x.toExponential(2) : x.toFixed(2); }
+
   function cellId(x, y) { return `c:${x},${y}`; }
 
-  // Spawn helper with early-out by density
+  // Mass→radius with linear crush (safe default)
+  function radiusForMass(m) {
+    if (m <= CRUSH_MC) return BASE_R_WORLD * Math.sqrt(m);
+    const q = 1 + CRUSH_K * (m - CRUSH_MC);        // density multiplier grows linearly
+    const r = BASE_R_WORLD * Math.sqrt(m / q);     // denser → smaller radius than sqrt(m)
+    return Math.max(1e-6, r);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 7) Spawning & merging
+  // ─────────────────────────────────────────────────────────────────────────────
   function addCellBodyIfNeeded(x, y) {
-    if (hash2D_u32(x, y) >= DENSITY_THR) return; // cheap reject
+    if (hash2D_u32(x, y) >= DENSITY_THR) return;
     const nk = nkey(x, y);
     if (consumedCells.has(nk)) return;
     if (activatedCells.has(nk)) return;
 
     const sMul = sizeMulAt(x, y);
-    const rWorld = BASE_R_WORLD * sMul;
-    const mass = Math.pow(sMul, 2); // m ∝ s^2
+    const mass = Math.pow(sMul, 2);
 
+    // Deterministic orientation & speed
     const ang = 2 * Math.PI * hash01(x + 4242, y + 7777);
     const speed = 1 + (V0_MAX - 1) * hash01(x + 31415, y + 2718);
-    const vx0 = Math.cos(ang) * speed;
-    const vy0 = Math.sin(ang) * speed;
+    let vx0 = Math.cos(ang) * speed;
+    let vy0 = Math.sin(ang) * speed;
+
+    // Add banded horizontal velocity bias
+    if (VBIAS_BAND_H > 0 && isFinite(VBIAS_BAND_H)) {
+      const phase = (2 * Math.PI * (y)) / VBIAS_BAND_H;
+      vx0 += Math.sin(phase) * VBIAS_ADD;
+    }
 
     const id = cellId(x, y);
+    const rWorld = radiusForMass(mass);
     bodies.set(id, {
       id,
       x: x + 0.5,
@@ -226,7 +278,9 @@
       vy: vy0,
       m: mass,
       rWorld,
-      sources: [nk]
+      sources: [nk],
+      emaCps: 0,
+      collCount: 0
     });
     activatedCells.add(nk);
   }
@@ -241,12 +295,13 @@
     const sources = bi.sources.concat(bj.sources);
     for (const s of sources) consumedCells.add(s);
 
-    const mNew = mSum;
-    const sizeFactorNew = Math.sqrt(mNew); // m ∝ s^2 => s = m^(1/2)
-    const rWorldNew = BASE_R_WORLD * sizeFactorNew;
-
+    const rWorldNew = radiusForMass(mSum);
     const id = `m:${mergeIdCounter++}`;
-    const merged = { id, x: xNew, y: yNew, vx: vxNew, vy: vyNew, m: mNew, rWorld: rWorldNew, sources };
+    const merged = {
+      id, x: xNew, y: yNew, vx: vxNew, vy: vyNew, m: mSum, rWorld: rWorldNew, sources,
+      emaCps: (bi.emaCps * bi.m + bj.emaCps * bj.m) / (mSum || 1),
+      collCount: 0
+    };
 
     if (selectedId === bi.id || selectedId === bj.id) selectedId = id;
 
@@ -257,7 +312,9 @@
     return merged;
   }
 
-/* ======================[ Section 4: Barnes–Hut Quadtree & Forces ]===================== */
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 8) Barnes–Hut quadtree
+  // ─────────────────────────────────────────────────────────────────────────────
   function buildQuadTree(activeBodies) {
     if (activeBodies.length === 0) return null;
 
@@ -325,8 +382,8 @@
 
     function finalize(node) {
       if (node.count > 0) {
-        node.comX = node.mx / node.m;
-        node.comY = node.my / node.m;
+        node.comX = node.mx / (node.m || 1);
+        node.comY = node.my / (node.m || 1);
       } else {
         node.comX = node.cx;
         node.comY = node.cy;
@@ -356,11 +413,68 @@
     }
   }
 
-/* ==========================[ Section 5: Simulation Step ]========================== */
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 9) Collision response (bounce-only path)
+  // ─────────────────────────────────────────────────────────────────────────────
+  function resolveCollisionNoMerge(a, b) {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const dist = Math.hypot(dx, dy) || 1e-9;
+    const nx = dx / dist;
+    const ny = dy / dist;
+
+    // Positional correction to avoid sinking
+    const sumR = a.rWorld + b.rWorld;
+    const overlap = sumR - dist;
+    if (overlap > 0) {
+      const invA = 1 / a.m;
+      const invB = 1 / b.m;
+      const invSum = invA + invB;
+      const corr = overlap / (invSum || 1e-9);
+      a.x -= nx * corr * invA;
+      a.y -= ny * corr * invA;
+      b.x += nx * corr * invB;
+      b.y += ny * corr * invB;
+    }
+
+    // Relative velocity
+    const rvx = b.vx - a.vx;
+    const rvy = b.vy - a.vy;
+
+    const vn = rvx * nx + rvy * ny;   // approach speed
+    if (vn > 0) return;               // already separating
+
+    const tx = -ny, ty = nx;
+    const vt = rvx * tx + rvy * ty;
+
+    const invA = 1 / a.m;
+    const invB = 1 / b.m;
+    const invSum = invA + invB;
+
+    // Normal impulse with restitution
+    const e = REST_E;
+    const jn = -(1 + e) * vn / (invSum || 1e-9);
+    const jnx = jn * nx, jny = jn * ny;
+    a.vx -= jnx * invA; a.vy -= jny * invA;
+    b.vx += jnx * invB; b.vy += jny * invB;
+
+    // Tangential (Coulomb) friction impulse
+    let jt = -vt / (invSum || 1e-9);
+    const jtMax = FRICTION_MU * Math.abs(jn);
+    if (jt >  jtMax) jt =  jtMax;
+    if (jt < -jtMax) jt = -jtMax;
+    const jtx = jt * tx, jty = jt * ty;
+    a.vx -= jtx * invA; a.vy -= jty * invA;
+    b.vx += jtx * invB; b.vy += jty * invB;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 10) Simulation (forces, integration, collisions)
+  // ─────────────────────────────────────────────────────────────────────────────
   function simulate(dt, viewBounds) {
     const { x0, y0, x1, y1 } = viewBounds;
 
-    // Build active list (viewport filter)
+    // Active list
     const active = [];
     for (const b of bodies.values()) {
       if (b.x + b.rWorld < x0 || b.y + b.rWorld < y0 ||
@@ -370,7 +484,7 @@
     const n = active.length;
     if (n === 0) { lastGravMs = 0; lastIntegrateMs = 0; lastCollideMs = 0; return; }
 
-    // --- Gravity timings ---
+    // Gravity timings
     const tTree0 = performance.now();
     const root = buildQuadTree(active);
     const tTree1 = performance.now();
@@ -390,7 +504,7 @@
     const tForce1 = performance.now();
     lastGravMs = treeMs + (tForce1 - tForce0);
 
-    // --- Integration timing ---
+    // Integration
     const tInt0 = performance.now();
     for (let i = 0; i < n; i++) {
       const b = active[i];
@@ -406,6 +520,7 @@
         if (dx !== 0 || dy !== 0) {
           const invLen = 1 / Math.hypot(dx, dy);
           dx *= invLen; dy *= invLen;
+          const CONTROL_ACCEL = 25.0;
           addAX = CONTROL_ACCEL * dx;
           addAY = CONTROL_ACCEL * dy;
         }
@@ -419,10 +534,10 @@
     const tInt1 = performance.now();
     lastIntegrateMs = tInt1 - tInt0;
 
-    // --- Collision broad phase with buckets (and resolve/merge) ---
+    // Broad phase with buckets
     const tColl0 = performance.now();
 
-    /** Map<number, string[]>: bucket key -> array of body ids overlapping that bucket */
+    /** Map<number, string[]> */
     const buckets = new Map();
     /** Map<string, {cx0:number,cx1:number,cy0:number,cy1:number}> */
     const ranges = new Map();
@@ -435,14 +550,12 @@
       return { cx0, cx1, cy0, cy1 };
     }
 
-    // Fill buckets with multi-bucket occupancy
     for (const b of active) {
       const r = rangeForBody(b);
       ranges.set(b.id, r);
       for (let cy = r.cy0; cy <= r.cy1; cy++) {
-        const rowBase = cy;
         for (let cx = r.cx0; cx <= r.cx1; cx++) {
-          const key = bkKey(cx, rowBase);
+          const key = bkKey(cx, cy);
           let arr = buckets.get(key);
           if (!arr) { arr = []; buckets.set(key, arr); }
           arr.push(b.id);
@@ -450,14 +563,12 @@
       }
     }
 
-    // Helper: (re)insert a body into all buckets it overlaps (after merge)
     function insertBodyIntoBuckets(body) {
       const r = rangeForBody(body);
       ranges.set(body.id, r);
       for (let cy = r.cy0; cy <= r.cy1; cy++) {
-        const rowBase = cy;
         for (let cx = r.cx0; cx <= r.cx1; cx++) {
-          const key = bkKey(cx, rowBase);
+          const key = bkKey(cx, cy);
           let arr = buckets.get(key);
           if (!arr) { arr = []; buckets.set(key, arr); }
           arr.push(body.id);
@@ -465,81 +576,13 @@
       }
     }
 
-    // Canonical bucket computation for pair (by ranges)
     function isCanonicalBucket(cx, cy, rA, rB) {
       const cxCanon = Math.max(rA.cx0, rB.cx0);
       const cyCanon = Math.max(rA.cy0, rB.cy0);
       return cx === cxCanon && cy === cyCanon;
     }
 
-    // --- Collision response helpers (bounce + friction, no spin) ---
-    function resolveBounceWithFriction(a, b, overlap, nx, ny) {
-      // Inverse masses
-      const invA = 1 / a.m;
-      const invB = 1 / b.m;
-      const invSum = invA + invB;
-      if (invSum === 0) return; // both infinite mass? (not possible here)
-
-      // Positional correction (to kill overlap). Push out along normal.
-      const k_slop = 0.01;      // small allowance
-      const percent = 0.8;      // 80% of penetration correction
-      const corr = Math.max(overlap - k_slop, 0) * percent / invSum;
-      a.x -= nx * corr * invA;
-      a.y -= ny * corr * invA;
-      b.x += nx * corr * invB;
-      b.y += ny * corr * invB;
-
-      // Relative velocity
-      const rvx0 = b.vx - a.vx;
-      const rvy0 = b.vy - a.vy;
-
-      // Normal impulse (restitution)
-      const vRelN = rvx0 * nx + rvy0 * ny; // rv·n
-      if (vRelN > 0) return; // already separating
-
-      const jn = -(1 + RESTITUTION) * vRelN / invSum;
-
-      // Apply normal impulse
-      const impNx = nx * jn;
-      const impNy = ny * jn;
-      a.vx -= impNx * invA;
-      a.vy -= impNy * invA;
-      b.vx += impNx * invB;
-      b.vy += impNy * invB;
-
-      // Recompute relative velocity after normal impulse
-      const rvx = b.vx - a.vx;
-      const rvy = b.vy - a.vy;
-
-      // Tangent vector (perp to normal)
-      let tx = -ny, ty = nx;
-      // Project rv onto tangent
-      const vRelT = rvx * tx + rvy * ty;
-
-      // Friction impulse magnitude uncapped
-      let jt_unc = - vRelT / invSum;
-
-      // Coulomb clamp
-      const jt_max = FRICTION_MU * jn;
-      let jt;
-      if (Math.abs(jt_unc) <= jt_max) {
-        // static friction: remove all tangential slip
-        jt = jt_unc;
-      } else {
-        // kinetic friction: clamp to μ * jn
-        jt = -Math.sign(vRelT) * jt_max;
-      }
-
-      // Apply tangential impulse
-      const impTx = tx * jt;
-      const impTy = ty * jt;
-      a.vx -= impTx * invA;
-      a.vy -= impTy * invA;
-      b.vx += impTx * invB;
-      b.vy += impTy * invB;
-    }
-
-    // Narrow phase with canonical-bucket dedup
+    // Narrow phase
     for (const [key, arr] of buckets) {
       const cx = Math.floor(key / BUCKET_STRIDE);
       const cy = key - cx * BUCKET_STRIDE;
@@ -547,7 +590,7 @@
       for (let i = 0; i < arr.length; i++) {
         let idA = arr[i];
         let a = bodies.get(idA);
-        if (!a) continue; // merged away earlier
+        if (!a) continue;
 
         for (let j = i + 1; j < arr.length; j++) {
           const idB = arr[j];
@@ -558,18 +601,22 @@
           const rB = ranges.get(idB);
           if (!rA || !rB) continue;
 
-          // Only test in the canonical bucket shared by A & B
           if (!isCanonicalBucket(cx, cy, rA, rB)) continue;
 
           const dx = b.x - a.x;
           const dy = b.y - a.y;
           const sumR = a.rWorld + b.rWorld;
-          const d2 = dx*dx + dy*dy;
-          if (d2 <= sumR*sumR) {
-            const dist = Math.sqrt(Math.max(1e-12, d2));
-            const overlap = sumR - dist;
+          if (dx*dx + dy*dy <= sumR*sumR) {
+            // Count this collision for EMA (both bodies)
+            a.collCount = (a.collCount || 0) + 1;
+            b.collCount = (b.collCount || 0) + 1;
 
-            if (MERGE_ENABLED) {
+            // Sticky logic: BOTH bodies must exceed STICKY_THR and merging must be enabled
+            const stickyA = (a.emaCps || 0) >= STICKY_THR;
+            const stickyB = (b.emaCps || 0) >= STICKY_THR;
+            const wantMerge = MERGE_ON && stickyA && stickyB;
+
+            if (wantMerge) {
               const merged = mergeBodies(a, b);
               ranges.delete(idA);
               ranges.delete(idB);
@@ -577,16 +624,11 @@
               idA = merged.id;
               a = merged;
               arr[i] = idA;
-              j = i;
+              j = i; // restart comparisons for this i with the merged body
             } else {
-              // Resolve bounce with restitution & friction (no merge)
-              let nx = dx / dist;
-              let ny = dy / dist;
-              if (!isFinite(nx) || !isFinite(ny)) { // degenerate
-                // pick an arbitrary normal
-                nx = 1; ny = 0;
-              }
-              resolveBounceWithFriction(a, b, overlap, nx, ny);
+              // Bounce (no unconditional merging anymore)
+              resolveCollisionNoMerge(a, b);
+              // keep both bodies; next frame broad-phase rebuild handles updates
             }
           }
         }
@@ -595,10 +637,21 @@
 
     const tColl1 = performance.now();
     lastCollideMs = tColl1 - tColl0;
+
+    // Update EMA CPS for all active bodies
+    if (dt > 0) {
+      const alpha = 1 - Math.exp(-dt / EMA_TAU);
+      for (const b of active) {
+        const inst = (b.collCount || 0) / dt;
+        b.emaCps = (b.emaCps || 0) + alpha * (inst - (b.emaCps || 0));
+        b.collCount = 0;
+      }
+    }
   }
 
-/* =============================[ Section 6: Render Loop ]============================= */
-  // --- Spawn deltas (only newly revealed cells) ---
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 11) Spawn delta logic (newly revealed cells only)
+  // ─────────────────────────────────────────────────────────────────────────────
   let prevX0 = null, prevY0 = null, prevX1 = null, prevY1 = null;
 
   function spawnRect(x0, x1, y0, y1) {
@@ -628,39 +681,37 @@
     prevX0 = curr.x0; prevY0 = curr.y0; prevX1 = curr.x1; prevY1 = curr.y1;
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 12) Render
+  // ─────────────────────────────────────────────────────────────────────────────
   function render() {
     if (!needsRender) return;
     needsRender = false;
 
     const t0 = performance.now();
-
     const w = canvas.width, h = canvas.height;
 
-    // Clear to black
+    // Clear
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, w, h);
 
-    // Visible world-cell bounds (integer rect)
+    // Visible bounds
     const x0 = Math.max(0, Math.floor(viewX));
     const y0 = Math.max(0, Math.floor(viewY));
     const x1 = Math.min(WORLD_SIZE, Math.ceil(viewX + w / scale));
     const y1 = Math.min(WORLD_SIZE, Math.ceil(viewY + h / scale));
     const viewBounds = { x0, y0, x1, y1 };
 
-    // Timing (frame dt for controls)
-    const now = performance.now() * 0.001; // seconds
+    // Frame dt for controls
+    const now = performance.now() * 0.001;
     let dtFrame = 0;
-    if (lastFrameTime == null) {
-      lastFrameTime = now;
-    } else {
-      dtFrame = Math.min(0.1, Math.max(0, now - lastFrameTime));
-      lastFrameTime = now;
-    }
+    if (lastFrameTime == null) lastFrameTime = now;
+    else { dtFrame = Math.min(0.1, Math.max(0, now - lastFrameTime)); lastFrameTime = now; }
 
     const active = simActive();
 
-    // Spawn only when active & only for newly revealed cells
+    // Spawn
     if (active) {
       const tSpawn0 = performance.now();
       spawnNewlyRevealed(viewBounds);
@@ -672,7 +723,7 @@
       lastIntegrateMs = 0;
       lastCollideMs = 0;
       lastSpawnMs = 0;
-      prevX0 = prevY0 = prevX1 = prevY1 = null; // force spawn next time (optional)
+      prevX0 = prevY0 = prevX1 = prevY1 = null;
     }
 
     // Physics step
@@ -680,34 +731,27 @@
     if (active) {
       const nowS = performance.now() * 0.001;
       if (lastSimTime == null) lastSimTime = nowS;
-      else {
-        dt = Math.min(MAX_DT, Math.max(0, nowS - lastSimTime));
-        lastSimTime = nowS;
-      }
+      else { dt = Math.min(MAX_DT, Math.max(0, nowS - lastSimTime)); lastSimTime = nowS; }
       if (dt > 0) simulate(dt, viewBounds);
-    } else {
-      // Thrusters still operate when gravity is off (not counted in integration ms)
-      if (selectedId && (keyW || keyA || keyS || keyD)) {
-        const b = bodies.get(selectedId);
-        if (b) {
-          let dx = 0, dy = 0;
-          if (keyA) dx -= 1;
-          if (keyD) dx += 1;
-          if (keyW) dy -= 1;
-          if (keyS) dy += 1;
-          if (dx !== 0 || dy !== 0) {
-            const inv = 1 / Math.hypot(dx, dy);
-            dx *= inv; dy *= inv;
-            b.vx += CONTROL_ACCEL * dx * dtFrame;
-            b.vy += CONTROL_ACCEL * dy * dtFrame;
-            b.x  += b.vx * dtFrame;
-            b.y  += b.vy * dtFrame;
-          }
+    } else if (selectedId && (keyW || keyA || keyS || keyD)) {
+      const b = bodies.get(selectedId);
+      if (b) {
+        let dx = 0, dy = 0;
+        if (keyA) dx -= 1; if (keyD) dx += 1;
+        if (keyW) dy -= 1; if (keyS) dy += 1;
+        if (dx !== 0 || dy !== 0) {
+          const inv = 1 / Math.hypot(dx, dy);
+          dx *= inv; dy *= inv;
+          const CONTROL_ACCEL = 25.0;
+          b.vx += CONTROL_ACCEL * dx * dtFrame;
+          b.vy += CONTROL_ACCEL * dy * dtFrame;
+          b.x  += b.vx * dtFrame;
+          b.y  += b.vy * dtFrame;
         }
       }
     }
 
-    // Camera follow (after motion)
+    // Camera follow
     if (followSelected && selectedId) {
       const b = bodies.get(selectedId);
       if (b) {
@@ -719,10 +763,8 @@
       }
     }
 
-    // --- Render timing begins ---
+    // Draw bodies
     const tDraw0 = performance.now();
-
-    // Draw bodies (filled white)
     ctx.beginPath();
     for (const b of bodies.values()) {
       const cx = (b.x - viewX) * scale;
@@ -735,7 +777,7 @@
     ctx.fillStyle = '#fff';
     ctx.fill();
 
-    // Highlight selected with blue stroke
+    // Highlight selected
     if (selectedId) {
       const b = bodies.get(selectedId);
       if (b) {
@@ -749,6 +791,8 @@
           ctx.strokeStyle = '#33aaff';
           ctx.stroke();
         }
+        // Optional: show selected emaCps if a HUD span exists
+        if (emaVal) emaVal.textContent = (b.emaCps || 0).toFixed(1) + ' cps';
       } else {
         selectedId = null;
       }
@@ -757,35 +801,46 @@
     const tDraw1 = performance.now();
     lastRenderMs = tDraw1 - tDraw0;
 
-    // HUD (throttled ~10Hz)
+    // HUD
     const t1 = performance.now();
     lastTotalMs = t1 - t0;
     if ((hudCounter = (hudCounter + 1) % 6) === 0) {
-      hudZ.textContent = `${scale.toFixed(3)} px/unit`;
-      hudV.textContent = `x:[${x0}..${x1}] y:[${y0}..${y1}]`;
-      gVal.textContent = fmtG(G);
-      vmaxVal.textContent = fmtV0(V0_MAX);
-      rmaxVal.textContent = fmtR(SIZE_VAR_MAX * BASE_R_WORLD);
-      rminVal.textContent = fmtR(SIZE_VAR_MIN * BASE_R_WORLD);
-      dVal.textContent = fmtDensity(DENSITY);
-      biasVal.textContent = fmtBias(SIZE_BIAS);
-      followVal.textContent = followSelected ? 'On' : 'Off';
+      if (hudZ) hudZ.textContent = `${scale.toFixed(3)} px/unit`;
+      if (hudV) hudV.textContent = `x:[${x0}..${x1}] y:[${y0}..${y1}]`;
+      if (gVal) gVal.textContent = fmtG(G);
+      if (vmaxVal) vmaxVal.textContent = fmtV0(V0_MAX);
+      if (rmaxVal) rmaxVal.textContent = fmtR(SIZE_VAR_MAX * BASE_R_WORLD);
+      if (rminVal) rminVal.textContent = fmtR(SIZE_VAR_MIN * BASE_R_WORLD);
+      if (dVal) dVal.textContent = fmtDensity(DENSITY);
+      if (biasVal) biasVal.textContent = fmtBias(SIZE_BIAS);
+      if (followVal) followVal.textContent = followSelected ? 'On' : 'Off';
 
-      mergeVal.textContent = MERGE_ENABLED ? 'On' : 'Off';
-      eVal.textContent = fmt01(RESTITUTION);
-      muVal.textContent = fmt01(FRICTION_MU);
+      if (mergeVal)  mergeVal.textContent  = fmtBool(MERGE_ON);
+      if (stickyVal) stickyVal.textContent = STICKY_THR.toFixed(0) + ' cps';
+      if (restVal)   restVal.textContent   = fmtFloat(REST_E);
+      if (muVal)     muVal.textContent     = fmtFloat(FRICTION_MU);
 
-      perfVal.textContent =
-        `Grav ${lastGravMs.toFixed(1)} ms | ` +
-        `Spawn ${lastSpawnMs.toFixed(1)} ms | ` +
-        `Collide ${lastCollideMs.toFixed(1)} ms | ` +
-        `Integr ${lastIntegrateMs.toFixed(1)} ms | ` +
-        `Render ${lastRenderMs.toFixed(1)} ms | ` +
-        `Total ${lastTotalMs.toFixed(1)} ms`;
+      if (mcVal)     mcVal.textContent     = CRUSH_MC.toFixed(0);
+      if (kVal)      kVal.textContent      = fmtFloat(CRUSH_K);
+
+      if (bandVal)   bandVal.textContent   = VBIAS_BAND_H.toFixed(0);
+      if (vbiasVal)  vbiasVal.textContent  = fmtFloat(VBIAS_ADD);
+
+      if (perfVal) {
+        perfVal.textContent =
+          `Grav ${lastGravMs.toFixed(1)} ms | ` +
+          `Spawn ${lastSpawnMs.toFixed(1)} ms | ` +
+          `Collide ${lastCollideMs.toFixed(1)} ms | ` +
+          `Integr ${lastIntegrateMs.toFixed(1)} ms | ` +
+          `Render ${lastRenderMs.toFixed(1)} ms | ` +
+          `Total ${lastTotalMs.toFixed(1)} ms`;
+      }
     }
   }
 
-/* ===============================[ Section 7: Sizing ]=============================== */
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 13) Sizing
+  // ─────────────────────────────────────────────────────────────────────────────
   function resizeCanvas() {
     const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
     canvas.width  = Math.floor(canvas.clientWidth  * dpr);
@@ -793,18 +848,19 @@
     ctx.imageSmoothingEnabled = false;
     clampView();
     requestRender();
-    // Force spawn on next active frame since viewport changed
     prevX0 = prevY0 = prevX1 = prevY1 = null;
   }
 
-/* ===============================[ Section 8: Picking ]============================== */
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 14) Picking & input
+  // ─────────────────────────────────────────────────────────────────────────────
   function pickBodyAt(worldX, worldY) {
     let best = null;
     let bestD2 = Infinity;
     for (const b of bodies.values()) {
       const dx = worldX - b.x;
       const dy = worldY - b.y;
-      const rPick = Math.max(b.rWorld, MIN_CLICK_RADIUS); // ensure min clickable area
+      const rPick = Math.max(b.rWorld, MIN_CLICK_RADIUS);
       const d2 = dx*dx + dy*dy;
       if (d2 <= rPick * rPick && d2 < bestD2) {
         bestD2 = d2;
@@ -814,7 +870,6 @@
     return best ? best.id : null;
   }
 
-/* ======================[ Section 9: Input (pan/zoom/click) ]====================== */
   let dragging = false;
   let lastX = 0, lastY = 0;
   let downX = 0, downY = 0;
@@ -844,15 +899,14 @@
     if (dragging) {
       canvas.classList.remove('dragging');
       const moved2 = (e.clientX - downX) ** 2 + (e.clientY - downY) ** 2;
-      const CLICK_TOL2 = 25; // ~5px^2
+      const CLICK_TOL2 = 25;
       if (moved2 <= CLICK_TOL2 && e.button === 0) {
         const rect = canvas.getBoundingClientRect();
         const mx = (e.clientX - rect.left) * (canvas.width  / canvas.clientWidth);
         const my = (e.clientY - rect.top ) * (canvas.height / canvas.clientHeight);
         const worldX = viewX + (mx / scale);
         const worldY = viewY + (my / scale);
-        const id = pickBodyAt(worldX, worldY);
-        selectedId = id; // null if none
+        selectedId = pickBodyAt(worldX, worldY);
         requestRender();
       }
     }
@@ -880,11 +934,10 @@
     clampView();
     requestRender();
 
-    prevX0 = prevY0 = prevX1 = prevY1 = null; // force spawn recompute
+    prevX0 = prevY0 = prevX1 = prevY1 = null;
     if (simActive()) lastSimTime = null;
   }, { passive: false });
 
-/* ===================[ Section 10: Keys (thrusters & follow) ]==================== */
   function handleKey(e, down) {
     const k = e.key.toLowerCase();
     if (k === 'w') { keyW = down; if (selectedId) e.preventDefault(); }
@@ -892,89 +945,101 @@
     else if (k === 's') { keyS = down; if (selectedId) e.preventDefault(); }
     else if (k === 'd') { keyD = down; if (selectedId) e.preventDefault(); }
     else if (k === 'escape' && down) { selectedId = null; requestRender(); }
-    else if (k === 'f' && down) { followSelected = !followSelected; followVal.textContent = followSelected ? 'On' : 'Off'; requestRender(); }
+    else if (k === 'f' && down) { followSelected = !followSelected; if (followVal) followVal.textContent = followSelected ? 'On' : 'Off'; requestRender(); }
   }
   window.addEventListener('keydown', (e) => handleKey(e, true), { passive: false });
   window.addEventListener('keyup',   (e) => handleKey(e, false), { passive: false });
 
-/* =============================[ Section 11: HUD controls ]============================= */
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 15) HUD controls (only attach if present)
+  // ─────────────────────────────────────────────────────────────────────────────
   function updateG(newG) {
     G = Math.min(G_MAX, Math.max(G_MIN, newG));
-    gVal.textContent = fmtG(G);
+    if (gVal) gVal.textContent = fmtG(G);
     requestRender();
   }
-  gMinusBtn.addEventListener('click', () => updateG(G / G_STEP));
-  gPlusBtn .addEventListener('click', () => updateG(G * G_STEP));
+  if (gMinusBtn) gMinusBtn.addEventListener('click', () => updateG(G / G_STEP));
+  if (gPlusBtn)  gPlusBtn .addEventListener('click', () => updateG(G * G_STEP));
 
   function updateV0Max(newMax) {
     V0_MAX = Math.min(V0_MAX_CAP, Math.max(V0_MIN, newMax));
-    vmaxVal.textContent = fmtV0(V0_MAX);
+    if (vmaxVal) vmaxVal.textContent = fmtV0(V0_MAX);
   }
-  vmaxMinusBtn.addEventListener('click', () => updateV0Max(V0_MAX / V0_STEP));
-  vmaxPlusBtn .addEventListener('click', () => updateV0Max(V0_MAX * V0_STEP));
+  if (vmaxMinusBtn) vmaxMinusBtn.addEventListener('click', () => updateV0Max(V0_MAX / V0_STEP));
+  if (vmaxPlusBtn)  vmaxPlusBtn .addEventListener('click', () => updateV0Max(V0_MAX * V0_STEP));
 
   function updateRmax(multiplierNew) {
     SIZE_VAR_MAX = Math.min(S_MAX_MAX, Math.max(S_MAX_MIN, multiplierNew));
     if (SIZE_VAR_MAX < SIZE_VAR_MIN) SIZE_VAR_MIN = SIZE_VAR_MAX;
-    rmaxVal.textContent = fmtR(SIZE_VAR_MAX * BASE_R_WORLD);
-    rminVal.textContent = fmtR(SIZE_VAR_MIN * BASE_R_WORLD);
+    if (rmaxVal) rmaxVal.textContent = fmtR(SIZE_VAR_MAX * BASE_R_WORLD);
+    if (rminVal) rminVal.textContent = fmtR(SIZE_VAR_MIN * BASE_R_WORLD);
     requestRender();
   }
-  rmaxMinusBtn.addEventListener('click', () => updateRmax(SIZE_VAR_MAX / S_STEP));
-  rmaxPlusBtn .addEventListener('click', () => updateRmax(SIZE_VAR_MAX * S_STEP));
+  if (rmaxMinusBtn) rmaxMinusBtn.addEventListener('click', () => updateRmax(SIZE_VAR_MAX / S_STEP));
+  if (rmaxPlusBtn)  rmaxPlusBtn .addEventListener('click', () => updateRmax(SIZE_VAR_MAX * S_STEP));
 
   function updateRmin(multiplierNew) {
     SIZE_VAR_MIN = Math.min(S_MIN_MAX, Math.max(S_MIN_MIN, multiplierNew));
     if (SIZE_VAR_MIN > SIZE_VAR_MAX) SIZE_VAR_MAX = SIZE_VAR_MIN;
-    rminVal.textContent = fmtR(SIZE_VAR_MIN * BASE_R_WORLD);
-    rmaxVal.textContent = fmtR(SIZE_VAR_MAX * BASE_R_WORLD);
+    if (rminVal) rminVal.textContent = fmtR(SIZE_VAR_MIN * BASE_R_WORLD);
+    if (rmaxVal) rmaxVal.textContent = fmtR(SIZE_VAR_MAX * BASE_R_WORLD);
     requestRender();
   }
-  rminMinusBtn.addEventListener('click', () => updateRmin(SIZE_VAR_MIN / S_STEP));
-  rminPlusBtn  .addEventListener('click', () => updateRmin(SIZE_VAR_MIN * S_STEP));
+  if (rminMinusBtn) rminMinusBtn.addEventListener('click', () => updateRmin(SIZE_VAR_MIN / S_STEP));
+  if (rminPlusBtn)  rminPlusBtn .addEventListener('click', () => updateRmin(SIZE_VAR_MIN * S_STEP));
 
   function updateDensity(newD) {
     DENSITY = Math.min(D_MAX, Math.max(D_MIN, newD));
-    DENSITY_THR = Math.floor(DENSITY * 4294967296); // update threshold
-    dVal.textContent = fmtDensity(DENSITY);
+    DENSITY_THR = Math.floor(DENSITY * 4294967296);
+    if (dVal) dVal.textContent = fmtDensity(DENSITY);
     requestRender();
   }
-  dMinusBtn.addEventListener('click', () => updateDensity(DENSITY / D_STEP));
-  dPlusBtn .addEventListener('click', () => updateDensity(DENSITY * D_STEP));
+  if (dMinusBtn) dMinusBtn.addEventListener('click', () => updateDensity(DENSITY / D_STEP));
+  if (dPlusBtn)  dPlusBtn .addEventListener('click', () => updateDensity(DENSITY * D_STEP));
 
   function updateBias(newK) {
     SIZE_BIAS = Math.min(BIAS_MAX, Math.max(BIAS_MIN, newK));
-    biasVal.textContent = fmtBias(SIZE_BIAS);
+    if (biasVal) biasVal.textContent = fmtBias(SIZE_BIAS);
     requestRender();
   }
-  biasMinusBtn.addEventListener('click', () => updateBias(SIZE_BIAS / BIAS_STEP));
-  biasPlusBtn  .addEventListener('click', () => updateBias(SIZE_BIAS * BIAS_STEP));
+  if (biasMinusBtn) biasMinusBtn.addEventListener('click', () => updateBias(SIZE_BIAS / BIAS_STEP));
+  if (biasPlusBtn)  biasPlusBtn .addEventListener('click', () => updateBias(SIZE_BIAS * BIAS_STEP));
 
-  // Merge toggle, Restitution, and Friction μ
-  function updateMergeToggle() {
-    MERGE_ENABLED = !MERGE_ENABLED;
-    mergeVal.textContent = MERGE_ENABLED ? 'On' : 'Off';
-    requestRender();
-  }
-  mergeToggleBtn.addEventListener('click', updateMergeToggle);
+  // Merge HUD
+  function setMergeOn(v) { MERGE_ON = !!v; if (mergeVal) mergeVal.textContent = fmtBool(MERGE_ON); }
+  if (mergeToggle) mergeToggle.addEventListener('click', () => setMergeOn(!MERGE_ON));
 
-  function updateE(newE) {
-    RESTITUTION = Math.min(E_MAX, Math.max(E_MIN, newE));
-    eVal.textContent = fmt01(RESTITUTION);
-    requestRender();
-  }
-  eMinusBtn.addEventListener('click', () => updateE(RESTITUTION / E_STEP));
-  ePlusBtn .addEventListener('click', () => updateE(RESTITUTION * E_STEP));
+  function setStickyThr(newThr) { STICKY_THR = Math.max(0, newThr); if (stickyVal) stickyVal.textContent = STICKY_THR.toFixed(0) + ' cps'; }
+  if (stickyMinus) stickyMinus.addEventListener('click', () => setStickyThr(STICKY_THR / STICKY_STEP));
+  if (stickyPlus)  stickyPlus .addEventListener('click', () => setStickyThr(STICKY_THR * STICKY_STEP));
 
-  function updateMu(newMu) {
-    FRICTION_MU = Math.min(MU_MAX, Math.max(MU_MIN, newMu));
-    muVal.textContent = fmt01(FRICTION_MU);
-    requestRender();
-  }
-  muMinusBtn.addEventListener('click', () => updateMu(FRICTION_MU / MU_STEP));
-  muPlusBtn  .addEventListener('click', () => updateMu(FRICTION_MU * MU_STEP));
+  function setRest(newE) { REST_E = Math.max(0, Math.min(1.5, newE)); if (restVal) restVal.textContent = fmtFloat(REST_E); }
+  if (restMinus) restMinus.addEventListener('click', () => setRest(REST_E / REST_STEP));
+  if (restPlus)  restPlus .addEventListener('click', () => setRest(REST_E * REST_STEP));
 
-/* ===========================[ Section 12: Bootstrap & Tick ]=========================== */
+  function setMu(newMu) { FRICTION_MU = Math.max(0, Math.min(5, newMu)); if (muVal) muVal.textContent = fmtFloat(FRICTION_MU); }
+  if (muMinus) muMinus.addEventListener('click', () => setMu(FRICTION_MU / FRICT_STEP));
+  if (muPlus)  muPlus .addEventListener('click', () => setMu(FRICTION_MU * FRICT_STEP));
+
+  // Crush HUD
+  function setMC(newMC) { CRUSH_MC = Math.min(CRUSH_MC_MAX, Math.max(CRUSH_MC_MIN, newMC)); if (mcVal) mcVal.textContent = CRUSH_MC.toFixed(0); requestRender(); }
+  function setK(newK)   { CRUSH_K  = Math.min(CRUSH_K_MAX,  Math.max(CRUSH_K_MIN,  newK));   if (kVal)  kVal.textContent  = fmtFloat(CRUSH_K);   requestRender(); }
+  if (mcMinus) mcMinus.addEventListener('click', () => setMC(CRUSH_MC - 10));
+  if (mcPlus)  mcPlus .addEventListener('click', () => setMC(CRUSH_MC + 10));
+  if (kMinus)  kMinus .addEventListener('click', () => setK(CRUSH_K / 1.2));
+  if (kPlus)   kPlus  .addEventListener('click', () => setK(CRUSH_K * 1.2));
+
+  // Band bias HUD
+  function setBandH(v) { VBIAS_BAND_H = Math.max(1, Math.min(1000000, v)); if (bandVal) bandVal.textContent = VBIAS_BAND_H.toFixed(0); }
+  function setVbias(v) { VBIAS_ADD = v; if (vbiasVal) vbiasVal.textContent = fmtFloat(VBIAS_ADD); }
+  if (bandMinus) bandMinus.addEventListener('click', () => setBandH(VBIAS_BAND_H / 1.1));
+  if (bandPlus)  bandPlus .addEventListener('click', () => setBandH(VBIAS_BAND_H * 1.1));
+  if (vbiasMinus) vbiasMinus.addEventListener('click', () => setVbias(VBIAS_ADD / 1.1));
+  if (vbiasPlus)  vbiasPlus .addEventListener('click', () => setVbias(VBIAS_ADD * 1.1));
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 16) Bootstrap & tick
+  // ─────────────────────────────────────────────────────────────────────────────
   window.addEventListener('resize', resizeCanvas);
   resizeCanvas();
 
@@ -985,30 +1050,38 @@
     viewY = (WORLD_SIZE - vh) / 2;
     clampView();
 
-    gVal.textContent = fmtG(G);
-    vmaxVal.textContent = fmtV0(V0_MAX);
-    rmaxVal.textContent = fmtR(SIZE_VAR_MAX * BASE_R_WORLD);
-    rminVal.textContent = fmtR(SIZE_VAR_MIN * BASE_R_WORLD);
-    dVal.textContent = fmtDensity(DENSITY);
-    biasVal.textContent = fmtBias(SIZE_BIAS);
-    followVal.textContent = followSelected ? 'On' : 'Off';
+    if (gVal) gVal.textContent = fmtG(G);
+    if (vmaxVal) vmaxVal.textContent = fmtV0(V0_MAX);
+    if (rmaxVal) rmaxVal.textContent = fmtR(SIZE_VAR_MAX * BASE_R_WORLD);
+    if (rminVal) rminVal.textContent = fmtR(SIZE_VAR_MIN * BASE_R_WORLD);
+    if (dVal) dVal.textContent = fmtDensity(DENSITY);
+    if (biasVal) biasVal.textContent = fmtBias(SIZE_BIAS);
+    if (followVal) followVal.textContent = followSelected ? 'On' : 'Off';
 
-    mergeVal.textContent = MERGE_ENABLED ? 'On' : 'Off';
-    eVal.textContent = fmt01(RESTITUTION);
-    muVal.textContent = fmt01(FRICTION_MU);
+    if (mergeVal)  mergeVal.textContent  = fmtBool(MERGE_ON);
+    if (stickyVal) stickyVal.textContent = STICKY_THR.toFixed(0) + ' cps';
+    if (restVal)   restVal.textContent   = fmtFloat(REST_E);
+    if (muVal)     muVal.textContent     = fmtFloat(FRICTION_MU);
 
-    perfVal.textContent =
-      `Grav ${lastGravMs.toFixed(1)} ms | ` +
-      `Spawn ${lastSpawnMs.toFixed(1)} ms | ` +
-      `Collide ${lastCollideMs.toFixed(1)} ms | ` +
-      `Integr ${lastIntegrateMs.toFixed(1)} ms | ` +
-      `Render ${lastRenderMs.toFixed(1)} ms | ` +
-      `Total ${lastTotalMs.toFixed(1)} ms`;
+    if (mcVal)     mcVal.textContent     = CRUSH_MC.toFixed(0);
+    if (kVal)      kVal.textContent      = fmtFloat(CRUSH_K);
+
+    if (bandVal)   bandVal.textContent   = VBIAS_BAND_H.toFixed(0);
+    if (vbiasVal)  vbiasVal.textContent  = fmtFloat(VBIAS_ADD);
+
+    if (perfVal) {
+      perfVal.textContent =
+        `Grav ${lastGravMs.toFixed(1)} ms | ` +
+        `Spawn ${lastSpawnMs.toFixed(1)} ms | ` +
+        `Collide ${lastCollideMs.toFixed(1)} ms | ` +
+        `Integr ${lastIntegrateMs.toFixed(1)} ms | ` +
+        `Render ${lastRenderMs.toFixed(1)} ms | ` +
+        `Total ${lastTotalMs.toFixed(1)} ms`;
+    }
 
     requestRender();
   })();
 
-  // Animation driver:
   (function tick() {
     if (dragging || simActive() || selectedId || followSelected) requestRender();
     requestAnimationFrame(tick);
