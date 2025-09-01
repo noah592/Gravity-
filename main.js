@@ -13,7 +13,7 @@
 
   // Gravity / physics
   const GRAVITY_ZOOM_GATE = 1;
-  let   G = 15;
+  let   G = 35;
   const G_MIN = 1e-6, G_MAX = 1e6;
   const G_STEP = 1.1;
   const SOFTENING2 = 0.15;
@@ -50,7 +50,7 @@
 
   // Linear “crush” density rule (kept; safe defaults)
   let   CRUSH_K  = 0.0001;     // slope after threshold
-  let   CRUSH_MC = 300;        // mass where crush starts
+  let   CRUSH_MC = 1000;        // mass where crush starts
   const CRUSH_K_MIN=0, CRUSH_K_MAX=1;
   const CRUSH_MC_MIN=0, CRUSH_MC_MAX=1e6;
 
@@ -58,7 +58,7 @@
   let   MERGE_ON    = true;    // HUD toggle should control this if present
   let   STICKY_THR  = 800;     // EMA collisions/sec threshold
   let   REST_E      = 0.2;     // coefficient of restitution
-  let   FRICTION_MU = 0.15;    // tangential (Coulomb) friction at contact
+  let   FRICTION_MU = 0.02;    // tangential (Coulomb) friction at contact
   const STICKY_STEP = 1.2;     // generic steps for +/- buttons if present
   const REST_STEP   = 1.1;
   const FRICT_STEP  = 1.1;

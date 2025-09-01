@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Random Circles — Barnes–Hut Gravity</title>
+  <title>Gravity</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -17,83 +17,89 @@
     </div>
 
     <div class="row">
-      <span>G: <span id="gval"></span></span>
+      <span>Grav Strength: <span id="gval"></span></span>
       <button id="gMinus" title="Decrease G">−</button>
       <button id="gPlus"  title="Increase G">+</button>
     </div>
 
     <div class="row">
-      <span>V₀ max (units/s): <span id="vmaxVal"></span></span>
+      <span>Particle Initial Speed Max (Randomized up to this): <span id="vmaxVal"></span></span>
       <button id="vmaxMinus" title="Decrease max initial speed">−</button>
       <button id="vmaxPlus"  title="Increase max initial speed">+</button>
     </div>
 
     <div class="row">
-      <span>Circle R max (units): <span id="rmaxVal"></span></span>
+      <span>Starting Particle Size Max: <span id="rmaxVal"></span></span>
       <button id="rmaxMinus" title="Decrease max circle radius">−</button>
       <button id="rmaxPlus"  title="Increase max circle radius">+</button>
     </div>
 
     <div class="row">
-      <span>Circle R min (units): <span id="rminVal"></span></span>
+      <span>Starting Particle Size Min: <span id="rminVal"></span></span>
       <button id="rminMinus" title="Decrease min circle radius">−</button>
       <button id="rminPlus"  title="Increase min circle radius">+</button>
     </div>
 
     <div class="row">
-      <span>Density: <span id="dVal"></span></span>
+      <span>Spawn Density: <span id="dVal"></span></span>
       <button id="dMinus" title="Decrease density">−</button>
       <button id="dPlus"  title="Increase density">+</button>
     </div>
 
     <div class="row">
-      <span>Size bias k: <span id="biasVal"></span></span>
+      <span>Size Bias: <span id="biasVal"></span></span>
       <button id="biasMinus" title="Decrease size bias (larger dots)">−</button>
       <button id="biasPlus"  title="Increase size bias (smaller dots)">+</button>
-      <span class="hint">(k=1 uniform; k&gt;1 → smaller)</span>
+      <span class="hint">(Higher Number = More Small Dots)</span>
     </div>
 
     <!-- Crush controls -->
     <div class="row">
-      <span>Crush threshold M<sub>C</sub>: <span id="mcVal"></span></span>
+      <span>Compaction Threshold (Kg):<sub>C</sub>: <span id="mcVal"></span></span>
       <button id="mcMinus" title="Lower crush threshold">−</button>
       <button id="mcPlus"  title="Raise crush threshold">+</button>
     </div>
     <div class="row">
-      <span>Crush slope K: <span id="kVal"></span></span>
-      <button id="kMinus" title="Lower crush slope">−</button>
-      <button id="kPlus"  title="Raise crush slope">+</button>
+      <span>Compaction Rate : <span id="kVal"></span></span>
+      <button id="kMinus" title="Less crushing">−</button>
+      <button id="kPlus"  title="More crushing">+</button>
     </div>
 
     <!-- Banded velocity add -->
     <div class="row">
-      <span>Band height (units): <span id="bandVal"></span></span>
+      <span>Flowing Currents Hight : <span id="bandVal"></span></span>
       <button id="bandMinus" title="Smaller bands">−</button>
       <button id="bandPlus"  title="Larger bands">+</button>
     </div>
     <div class="row">
-      <span>V<sub>bias</sub> add (units/s): <span id="vbiasVal"></span></span>
+      <span>Current Speed: <span id="vbiasVal"></span></span>
       <button id="vbiasMinus" title="Lower bias speed">−</button>
       <button id="vbiasPlus"  title="Raise bias speed">+</button>
     </div>
 
     <!-- Collision response -->
     <div class="row">
-      <span>Merge: <span id="mergeVal">On</span></span>
+      <span>Body Merge: <span id="mergeVal">On</span></span>
       <button id="mergeToggle" title="Toggle merging">Toggle</button>
       <span class="sep">|</span>
-      <span>Restitution e: <span id="restVal"></span></span>
+	  </div>
+	  
+	  <div class="row">
+      <span>Collision Restitution (Bouncyness): <span id="restVal"></span></span>
       <button id="restMinus" title="Lower restitution (less bouncy)">−</button>
       <button id="restPlus"  title="Raise restitution (more bouncy)">+</button>
       <span class="sep">|</span>
-      <span>Friction μ: <span id="muVal"></span></span>
+	  </div>
+	  
+	  <div class="row">
+      <span>Friction (Higher = Less Vortex Behavior): <span id="muVal"></span></span>
       <button id="muMinus" title="Lower tangential friction">−</button>
       <button id="muPlus"  title="Raise tangential friction">+</button>
     </div>
 
     <!-- Sticky-by-EMA merging -->
     <div class="row">
-      <span>Sticky EMA thr (coll/s): <span id="stickyVal"></span></span>
+      <span>Merge Threshold: <span id="stickyVal"></span></span>
       <button id="stickyMinus" title="Lower sticky threshold">−</button>
       <button id="stickyPlus"  title="Raise sticky threshold">+</button>
     </div>
@@ -104,11 +110,32 @@
     </div>
 
     <div class="row">
-      <span>Perf:
+      <span>Performance Stats:
+	  </div> 
+	  <div class="row">
         <span id="perfVal">
-          Grav 0.0 ms | Spawn 0.0 ms | Collide 0.0 ms | Integr 0.0 ms | Render 0.0 ms | Total 0.0 ms
+          Grav 0.0 ms  Spawn 0.0 ms | Collide 0.0 ms | Integr 0.0 ms | Render 0.0 ms | Total 0.0 ms
         </span>
       </span>
+	  
+	 </div>
+	  
+	  <div class="row">
+    </div>
+	
+	 <div class="row">
+    </div>
+	 <div class="row">
+    </div>
+	 <div class="row">
+    </div>
+	 <div class="row">
+    </div>
+	 <div class="row">
+    </div>
+	
+	  <div class="row">
+      <span> CLICK ON A BODY TO CONTROL W/ WASD</span>
     </div>
   </div>
 
