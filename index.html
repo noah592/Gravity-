@@ -20,14 +20,6 @@
       <span>G: <span id="gval"></span></span>
       <button id="gMinus" title="Decrease G">−</button>
       <button id="gPlus"  title="Increase G">+</button>
-      <span class="hint">(gravity active when zoom ≥ 1 px/unit)</span>
-    </div>
-
-    <div class="row">
-      <span>α (influence): <span id="alphaVal"></span></span>
-      <button id="alphaMinus" title="Increase influence radius (lower α)">−</button>
-      <button id="alphaPlus"  title="Decrease influence radius (higher α)">+</button>
-      <span class="hint">(edge accel as a fraction of surface accel)</span>
     </div>
 
     <div class="row">
@@ -67,15 +59,19 @@
     </div>
 
     <div class="row">
+      <span>Selected EMA coll/s: <span id="emaCollVal">—</span></span>
+      <span class="hint">(click a body)</span>
+    </div>
+
+    <div class="row">
       <span>Perf:
         <span id="perfVal">
-          TreeB 0.0 ms | Grav 0.0 ms | Spawn 0.0 ms | Collide 0.0 ms | Integr 0.0 ms | Render 0.0 ms | Total 0.0 ms
+          Grav 0.0 ms | Spawn 0.0 ms | Collide 0.0 ms | Integr 0.0 ms | Render 0.0 ms | Total 0.0 ms
         </span>
       </span>
     </div>
   </div>
 
-  <!-- ES module entry point -->
-  <script type="module" src="game.js"></script>
+  <script src="main.js"></script>
 </body>
 </html>
