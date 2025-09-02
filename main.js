@@ -64,7 +64,7 @@
   const FRICT_STEP  = 1.1;
 
   // EMA smoothing for collisions/sec
-  const EMA_TAU = 0.35; // seconds (time-constant)
+  const EMA_TAU = 1; // seconds (time-constant)
 
   // Picking
   const MIN_CLICK_AREA = 5;
@@ -1087,3 +1087,4 @@
     requestAnimationFrame(tick);
   })();
 })();
+
