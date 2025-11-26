@@ -1,39 +1,26 @@
 // collideWorker.js
-// Collision detection with constant-acceleration prediction.
-// Given x, y, r, vx, vy, ax, ay, dt, we predict future positions and detect overlaps.
+// Simple collision detection worker.
+// Receives xs, ys, rs (positions + radii) and returns an array of index pairs.
 
 self.onmessage = function (e) {
-  const { jobId, xs, ys, rs, vxs, vys, axs, ays, dt, count } = e.data;
-
-  // Predict forward with constant acceleration:
-  // x_pred = x + vx*dt + 0.5*ax*dt^2
-  // y_pred = y + vy*dt + 0.5*ay*dt^2
-  // We reuse xs/ys in-place because their buffers are transferred.
-  const halfDt2 = 0.5 * dt * dt;
-  for (let i = 0; i < count; i++) {
-    xs[i] += vxs[i] * dt + axs[i] * halfDt2;
-    ys[i] += vys[i] * dt + ays[i] * halfDt2;
-  }
-
+  const { jobId, xs, ys, rs, count } = e.data;
   const pairs = detectCollisions(xs, ys, rs, count);
   self.postMessage({ jobId, pairs }, [pairs.buffer]);
 };
 
 function detectCollisions(xs, ys, rs, count) {
-  const BUCKET_SIZE   = 2.0;
   const WORLD_SIZE    = 1_000_000;
+  const BUCKET_SIZE   = 2.0;
   const MAX_CX        = Math.floor(WORLD_SIZE / BUCKET_SIZE);
   const MAX_CY        = Math.floor(WORLD_SIZE / BUCKET_SIZE);
   const BUCKET_STRIDE = 2_000_000;
 
-  // ranges: [cx0, cx1, cy0, cy1] per body
-  const ranges = new Int32Array(count * 4);
+  const ranges = new Int32Array(count * 4); // [cx0, cx1, cy0, cy1] per body
   const buckets = new Map();
 
   function clamp(v, lo, hi) {
     return v < lo ? lo : (v > hi ? hi : v);
   }
-
   function bkKey(cx, cy) {
     return cx * BUCKET_STRIDE + cy;
   }
@@ -93,7 +80,6 @@ function detectCollisions(xs, ys, rs, count) {
         const bCx0 = ranges[offB + 0];
         const bCy0 = ranges[offB + 2];
 
-        // canonical bucket: max of cx0/cy0
         const cxCanon = Math.max(aCx0, bCx0);
         const cyCanon = Math.max(aCy0, bCy0);
         if (cx !== cxCanon || cy !== cyCanon) continue;
