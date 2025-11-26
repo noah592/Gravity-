@@ -17,7 +17,7 @@
   const G_MIN = 1e-6, G_MAX = 1e6;
   const G_STEP = 1.1;
   const SOFTENING2 = 0.15;
-  const MAX_DT = 1 / 144; // your current experiment
+  const MAX_DT = 1 / 60; // your current experiment
 
   // Barnes–Hut
   const THETA = 1.0;
@@ -1096,3 +1096,4 @@
     requestAnimationFrame(tick);
   })();
 })();
+
