@@ -1,10 +1,19 @@
 // collideWorker.js
-// Collision detection only: given x, y, r arrays, return colliding index pairs.
+// Collision detection with constant-velocity prediction:
+// given x, y, r, vx, vy, dt, we predict future positions and detect overlaps.
 
 self.onmessage = function (e) {
-  const { jobId, xs, ys, rs, count } = e.data;
+  const { jobId, xs, ys, rs, vxs, vys, dt, count } = e.data;
+
+  // Predict forward with constant velocity:
+  // x_pred = x + vx * dt, y_pred = y + vy * dt
+  // We reuse xs/ys in-place because they are transferred and not needed by main.
+  for (let i = 0; i < count; i++) {
+    xs[i] += vxs[i] * dt;
+    ys[i] += vys[i] * dt;
+  }
+
   const pairs = detectCollisions(xs, ys, rs, count);
-  // Send pairs back as a Uint32Array
   self.postMessage({ jobId, pairs }, [pairs.buffer]);
 };
 
