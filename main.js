@@ -17,11 +17,11 @@
   const G_MIN = 1e-6, G_MAX = 1e6;
   const G_STEP = 1.1;
   const SOFTENING2 = 0.15;
-  const MAX_DT = 1 / 60;
+  const MAX_DT = 1 / 144; // your current experiment
 
   // Barnes–Hut
   const THETA = 1.0;
-  const LEAF_CAPACITY = 1; // (kept for reference; current insert splits immediately)
+  const LEAF_CAPACITY = 1;
 
   // Visual base radius; baseline r = BASE_R_WORLD * sqrt(m)
   const BASE_R_WORLD = 0.45;
@@ -44,9 +44,9 @@
   const V0_MIN = 0.1, V0_MAX_CAP = 5000.0;
   const V0_STEP = 1.1;
 
-  // Spawn-time horizontal velocity band bias (kept from prior version)
-  let   VBIAS_BAND_H = 250;    // world units per band
-  let   VBIAS_ADD    = 2.0;    // added vx amplitude (units/s)
+  // Spawn-time horizontal velocity band bias
+  let   VBIAS_BAND_H = 250;
+  let   VBIAS_ADD    = 2.0;
 
   // Linear “crush” density rule
   let   CRUSH_K  = 0.0001;
@@ -70,7 +70,7 @@
   const MIN_CLICK_AREA = 5;
   const MIN_CLICK_RADIUS = Math.sqrt(MIN_CLICK_AREA / Math.PI);
 
-  // Spatial hashing for collisions (main copy here still used for constants)
+  // Spatial hashing constants (mirrored by worker)
   const BUCKET_SIZE = 2.0;
   const MAX_CX = Math.floor(WORLD_SIZE / BUCKET_SIZE);
   const MAX_CY = Math.floor(WORLD_SIZE / BUCKET_SIZE);
@@ -80,7 +80,7 @@
   const clampCy = (cy) => Math.min(MAX_CY, Math.max(0, cy));
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 2) Canvas / HUD lookups (all guarded)
+  // 2) Canvas / HUD lookups
   // ─────────────────────────────────────────────────────────────────────────────
   const canvas = document.getElementById('view');
   const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
@@ -115,7 +115,6 @@
 
   const followVal = document.getElementById('followVal');
 
-  // Optional HUD items
   const mergeVal      = document.getElementById('mergeVal');
   const mergeToggle   = document.getElementById('mergeToggle');
   const stickyVal     = document.getElementById('stickyVal');
@@ -142,10 +141,10 @@
   const vbiasMinus    = document.getElementById('vbiasMinus');
   const vbiasPlus     = document.getElementById('vbiasPlus');
 
-  const emaVal        = document.getElementById('emaVal'); // optional
+  const emaVal        = document.getElementById('emaVal');
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 3) Viewport state & helpers
+  // 3) Viewport
   // ─────────────────────────────────────────────────────────────────────────────
   let scale = 2;
   let viewX = 0;
@@ -164,7 +163,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 4) Hashing / randomness helpers
+  // 4) Hash helpers
   // ─────────────────────────────────────────────────────────────────────────────
   function hash2D_u32(x, y) {
     let n = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263);
@@ -184,7 +183,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 5) Render/sim scheduling
+  // 5) Render scheduling
   // ─────────────────────────────────────────────────────────────────────────────
   let needsRender = false;
   function requestRender() {
@@ -195,12 +194,8 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 6) Persistent state (bodies & cells)
+  // 6) Bodies & cells
   // ─────────────────────────────────────────────────────────────────────────────
-  /**
-   * Body fields:
-   *  id, x, y, vx, vy, m, rWorld, sources[], emaCps, collCount, alive
-   */
   const bodies = new Map();
   const activatedCells = new Set();
   const consumedCells  = new Set();
@@ -209,16 +204,14 @@
   let lastFrameTime = null;
   let mergeIdCounter = 1;
 
-  // Perf metrics (ms)
   let lastGravMs = 0.0;
   let lastSpawnMs = 0.0;
-  let lastCollideMs = 0.0;  // now only measures main-thread collision *response*
+  let lastCollideMs = 0.0;
   let lastIntegrateMs = 0.0;
   let lastRenderMs = 0.0;
   let lastTotalMs = 0.0;
   let hudCounter = 0;
 
-  // Selection & control
   let selectedId = null;
   let keyW = false, keyA = false, keyS = false, keyD = false;
   let followSelected = false;
@@ -235,7 +228,6 @@
 
   function cellId(x, y) { return `c:${x},${y}`; }
 
-  // Mass→radius with linear crush
   function radiusForMass(m) {
     if (m <= CRUSH_MC) return BASE_R_WORLD * Math.sqrt(m);
     const q = 1 + CRUSH_K * (m - CRUSH_MC);
@@ -284,7 +276,6 @@
   }
 
   function mergeBodies(bi, bj) {
-    // Mark originals as not alive
     bi.alive = false;
     bj.alive = false;
 
@@ -323,7 +314,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 8) Barnes–Hut quadtree (unchanged)
+  // 8) Barnes–Hut
   // ─────────────────────────────────────────────────────────────────────────────
   function buildQuadTree(activeBodies) {
     if (activeBodies.length === 0) return null;
@@ -424,7 +415,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 9) Collision response (bounce-only path, unchanged)
+  // 9) Collision response
   // ─────────────────────────────────────────────────────────────────────────────
   function resolveCollisionNoMerge(a, b) {
     const dx = b.x - a.x;
@@ -475,7 +466,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 10) Simulation (forces + integration only; collisions moved to worker)
+  // 10) Simulation (forces + integration)
   // ─────────────────────────────────────────────────────────────────────────────
   function simulate(dt, viewBounds) {
     const { x0, y0, x1, y1 } = viewBounds;
@@ -491,7 +482,6 @@
     if (n === 0) {
       lastGravMs = 0;
       lastIntegrateMs = 0;
-      // collisions handled separately now
       return { active };
     }
 
@@ -542,13 +532,9 @@
     const tInt1 = performance.now();
     lastIntegrateMs = tInt1 - tInt0;
 
-    // collisions handled elsewhere
-    lastCollideMs = lastCollideMs; // keep last measured response time
-
     return { active };
   }
 
-  // Helper: collect active bodies for snapshot (post-integration)
   function collectActiveBodies(viewBounds) {
     const { x0, y0, x1, y1 } = viewBounds;
     const active = [];
@@ -562,13 +548,13 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 11) Worker-based collision detection pipeline (Option A, detection only)
+  // 11) Worker-based collision detection (with constant-velocity prediction)
   // ─────────────────────────────────────────────────────────────────────────────
   let collisionWorker = null;
   let collisionInFlight = false;
   let collisionJobCounter = 0;
 
-  let pendingCollisionJob = null; // { pairs, bodies, dt }
+  let pendingCollisionJob = null;
   let currentJobBodies = null;
   let currentJobDt = 0;
 
@@ -577,9 +563,8 @@
       collisionWorker = new Worker('collideWorker.js');
       collisionWorker.onmessage = (e) => {
         const { jobId, pairs } = e.data;
-        // Job IDs let us debug if needed; we only allow one in-flight anyway
         collisionInFlight = false;
-        if (!currentJobBodies) return; // nothing to apply into
+        if (!currentJobBodies) return;
         pendingCollisionJob = {
           pairs,
           bodies: currentJobBodies,
@@ -599,26 +584,30 @@
     const count = activeBodies.length;
     if (count === 0 || dt <= 0) return;
 
-    const xs = new Float32Array(count);
-    const ys = new Float32Array(count);
-    const rs = new Float32Array(count);
+    const xs  = new Float32Array(count);
+    const ys  = new Float32Array(count);
+    const rs  = new Float32Array(count);
+    const vxs = new Float32Array(count);
+    const vys = new Float32Array(count);
 
     for (let i = 0; i < count; i++) {
       const b = activeBodies[i];
-      xs[i] = b.x;
-      ys[i] = b.y;
-      rs[i] = b.rWorld;
-      b.collCount = 0; // reset per-job counter
+      xs[i]  = b.x;
+      ys[i]  = b.y;
+      rs[i]  = b.rWorld;
+      vxs[i] = b.vx;
+      vys[i] = b.vy;
+      b.collCount = 0;
     }
 
-    currentJobBodies = activeBodies.slice(); // snapshot of body refs
+    currentJobBodies = activeBodies.slice();
     currentJobDt = dt;
 
     const jobId = ++collisionJobCounter;
     collisionInFlight = true;
     collisionWorker.postMessage(
-      { jobId, xs, ys, rs, count },
-      [xs.buffer, ys.buffer, rs.buffer]
+      { jobId, xs, ys, rs, vxs, vys, dt, count },
+      [xs.buffer, ys.buffer, rs.buffer, vxs.buffer, vys.buffer]
     );
   }
 
@@ -638,7 +627,6 @@
       return;
     }
 
-    // Process all pairs: update collCount, then resolve collisions/merges
     for (let k = 0; k < len; k += 2) {
       const i = pairs[k];
       const j = pairs[k + 1];
@@ -656,14 +644,12 @@
       const wantMerge = MERGE_ON && stickyA && stickyB;
 
       if (wantMerge) {
-        // Approximation: merged body will only participate in collisions next frame
         mergeBodies(a, b);
       } else {
         resolveCollisionNoMerge(a, b);
       }
     }
 
-    // Update EMA CPS based on this job's dt
     if (dt > 0) {
       const alpha = 1 - Math.exp(-dt / EMA_TAU);
       for (const b of jobBodies) {
@@ -679,7 +665,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 12) Spawn delta logic (unchanged)
+  // 12) Spawn delta logic
   // ─────────────────────────────────────────────────────────────────────────────
   let prevX0 = null, prevY0 = null, prevX1 = null, prevY1 = null;
 
@@ -717,7 +703,6 @@
     if (!needsRender) return;
     needsRender = false;
 
-    // Apply collisions from the previous frame's snapshot (one-frame lag)
     applyPendingCollisions();
 
     const t0 = performance.now();
@@ -749,7 +734,6 @@
       lastSimTime = null;
       lastGravMs = 0;
       lastIntegrateMs = 0;
-      lastCollideMs = lastCollideMs; // keep last
       lastSpawnMs = 0;
       prevX0 = prevY0 = prevX1 = prevY1 = null;
     }
@@ -761,7 +745,6 @@
       else { dt = Math.min(MAX_DT, Math.max(0, nowS - lastSimTime)); lastSimTime = nowS; }
       if (dt > 0) {
         simulate(dt, viewBounds);
-        // After integration, kick off a collision detection job if none in flight
         const activeBodiesForJob = collectActiveBodies(viewBounds);
         startCollisionJob(activeBodiesForJob, dt);
       }
@@ -858,7 +841,7 @@
         perfVal.textContent =
           `Grav ${lastGravMs.toFixed(1)} ms | ` +
           `Spawn ${lastSpawnMs.toFixed(1)} ms | ` +
-          `Collide ${lastCollideMs.toFixed(1)} ms | ` + // response only
+          `Collide ${lastCollideMs.toFixed(1)} ms | ` +
           `Integr ${lastIntegrateMs.toFixed(1)} ms | ` +
           `Render ${lastRenderMs.toFixed(1)} ms | ` +
           `Total ${lastTotalMs.toFixed(1)} ms`;
@@ -880,7 +863,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 15) Picking & input (unchanged)
+  // 15) Picking & input
   // ─────────────────────────────────────────────────────────────────────────────
   function pickBodyAt(worldX, worldY) {
     let best = null;
@@ -980,7 +963,7 @@
   window.addEventListener('keyup',   (e) => handleKey(e, false), { passive: false });
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 16) HUD controls (unchanged)
+  // 16) HUD controls
   // ─────────────────────────────────────────────────────────────────────────────
   function updateG(newG) {
     G = Math.min(G_MAX, Math.max(G_MIN, newG));
@@ -1113,5 +1096,3 @@
     requestAnimationFrame(tick);
   })();
 })();
-
-
