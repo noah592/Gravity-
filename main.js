@@ -3,10 +3,6 @@
   // 1) Config & constants
   // ─────────────────────────────────────────────────────────────────────────────
   const WORLD_SIZE = 1_000_000;
-
-  // Max number of bodies in the sim (tune if needed)
-  const MAX_BODIES = 200_000;
-
   let   DENSITY = 0.0045;
   const D_MIN = 1e-7, D_MAX = 0.03;
   const D_STEP = 1.1;
@@ -25,6 +21,7 @@
 
   // Barnes–Hut
   const THETA = 1.0;
+  const LEAF_CAPACITY = 1; // (kept for reference; current insert splits immediately)
 
   // Visual base radius; baseline r = BASE_R_WORLD * sqrt(m)
   const BASE_R_WORLD = 0.45;
@@ -47,11 +44,11 @@
   const V0_MIN = 0.1, V0_MAX_CAP = 5000.0;
   const V0_STEP = 1.1;
 
-  // Spawn-time horizontal velocity band bias
-  let   VBIAS_BAND_H = 250;    // world units per band
+  // Spawn-time horizontal velocity band bias (kept from prior version)
+  let   VBIAS_BAND_H = 250;    // world units per band (defaults you requested earlier)
   let   VBIAS_ADD    = 2.0;    // added vx amplitude (units/s)
 
-  // Linear “crush” density rule
+  // Linear “crush” density rule (kept; safe defaults)
   let   CRUSH_K  = 0.0001;     // slope after threshold
   let   CRUSH_MC = 1000;       // mass where crush starts
   const CRUSH_K_MIN  = 0;
@@ -60,22 +57,22 @@
   const CRUSH_MC_MAX = 1e6;
 
   // Merge & collision response
-  let   MERGE_ON    = true;
+  let   MERGE_ON    = true;    // HUD toggle should control this if present
   let   STICKY_THR  = 800;     // EMA collisions/sec threshold
-  let   REST_E      = 0.2;     // restitution
-  let   FRICTION_MU = 0.02;    // tangential friction
-  const STICKY_STEP = 1.2;
+  let   REST_E      = 0.2;     // coefficient of restitution
+  let   FRICTION_MU = 0.02;    // tangential (Coulomb) friction at contact
+  const STICKY_STEP = 1.2;     // generic steps for +/- buttons if present
   const REST_STEP   = 1.1;
   const FRICT_STEP  = 1.1;
 
   // EMA smoothing for collisions/sec
-  const EMA_TAU = 1; // seconds
+  const EMA_TAU = 1; // seconds (time-constant)
 
   // Picking
   const MIN_CLICK_AREA = 5;
   const MIN_CLICK_RADIUS = Math.sqrt(MIN_CLICK_AREA / Math.PI);
 
-  // Spatial hashing for collisions
+  // Spatial hashing for collisions (multi-bucket with canonical bucket)
   const BUCKET_SIZE   = 2.0;
   const MAX_CX        = Math.floor(WORLD_SIZE / BUCKET_SIZE);
   const MAX_CY        = Math.floor(WORLD_SIZE / BUCKET_SIZE);
@@ -85,7 +82,7 @@
   const clampCy = (cy) => Math.min(MAX_CY, Math.max(0, cy));
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 2) Canvas / HUD lookups
+  // 2) Canvas / HUD lookups (all guarded)
   // ─────────────────────────────────────────────────────────────────────────────
   const canvas = document.getElementById('view');
   const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
@@ -98,7 +95,7 @@
   const gMinusBtn = document.getElementById('gMinus');
   const gPlusBtn  = document.getElementById('gPlus');
 
-  const vmaxVal = document.getElementById('vmaxVal');
+  const vmaxVal = document.getElementElementById?.('vmaxVal') || document.getElementById('vmaxVal');
   const vmaxMinusBtn = document.getElementById('vmaxMinus');
   const vmaxPlusBtn  = document.getElementById('vmaxPlus');
 
@@ -120,6 +117,7 @@
 
   const followVal = document.getElementById('followVal');
 
+  // Optional HUD items
   const mergeVal      = document.getElementById('mergeVal');
   const mergeToggle   = document.getElementById('mergeToggle');
   const stickyVal     = document.getElementById('stickyVal');
@@ -146,7 +144,7 @@
   const vbiasMinus    = document.getElementById('vbiasMinus');
   const vbiasPlus     = document.getElementById('vbiasPlus');
 
-  const emaVal        = document.getElementById('emaVal'); // optional
+  const emaVal        = document.getElementById('emaVal');     // selected body's EMA CPS (optional)
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 3) Viewport state & helpers
@@ -199,51 +197,20 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 6) Flattened body storage
+  // 6) Persistent state (bodies & cells)
   // ─────────────────────────────────────────────────────────────────────────────
-  // Arrays indexed by body index (0..bodyCount-1). 'alive[i] !== 0' means valid.
-  const bx   = new Float32Array(MAX_BODIES);
-  const by   = new Float32Array(MAX_BODIES);
-  const bvx  = new Float32Array(MAX_BODIES);
-  const bvy  = new Float32Array(MAX_BODIES);
-  const bm   = new Float32Array(MAX_BODIES);
-  const br   = new Float32Array(MAX_BODIES); // radius in world units
-  const bEma = new Float32Array(MAX_BODIES); // emaCps
-  const bCol = new Uint32Array(MAX_BODIES);  // collCount
-  const alive = new Uint8Array(MAX_BODIES);  // 0 or 1
+  /**
+   * Body fields:
+   *  id, x, y, vx, vy, m, rWorld, sources[], emaCps, collCount
+   */
+  /** @type {Map<string, {id:string,x:number,y:number,vx:number,vy:number,m:number,rWorld:number,sources:number[], emaCps:number, collCount:number}>} */
+  const bodies = new Map();
+  const activatedCells = new Set();
+  const consumedCells  = new Set();
 
-  // Per-body sources (JS arrays are fine; not hot in the inner math loops)
-  const bSources = new Array(MAX_BODIES);
-
-  // Freelist for reusing dead body slots
-  const freeList = [];
-  let bodyCount = 0;
-
-  function allocBodyIndex() {
-    if (freeList.length > 0) {
-      return freeList.pop();
-    }
-    if (bodyCount < MAX_BODIES) {
-      return bodyCount++;
-    }
-    return -1; // out of slots
-  }
-
-  function killBody(i) {
-    if (!alive[i]) return;
-    alive[i] = 0;
-    bSources[i] = null;
-    freeList.push(i);
-    if (i === selectedIndex) selectedIndex = -1;
-  }
-
-  // Activated / consumed cells (same as before)
-  const activatedCells = new Set(); // nk where a body was spawned
-  const consumedCells  = new Set(); // nk that already merged away
-
-  // Simulation timing
   let lastSimTime = null;
   let lastFrameTime = null;
+  let mergeIdCounter = 1;
 
   // Perf metrics (ms)
   let lastGravMs = 0.0;
@@ -255,7 +222,7 @@
   let hudCounter = 0;
 
   // Selection & control
-  let selectedIndex = -1;
+  let selectedId = null;
   let keyW = false, keyA = false, keyS = false, keyD = false;
   let followSelected = false;
 
@@ -269,25 +236,60 @@
   function fmtBool(b) { return b ? 'On' : 'Off'; }
   function fmtFloat(x) { return (Math.abs(x) < 0.01 || Math.abs(x) >= 1000) ? x.toExponential(2) : x.toFixed(2); }
 
-  // Mass→radius with linear crush
+  function cellId(x, y) { return `c:${x},${y}`; }
+
+  // Mass→radius with linear crush (safe default)
   function radiusForMass(m) {
     if (m <= CRUSH_MC) return BASE_R_WORLD * Math.sqrt(m);
-    const q = 1 + CRUSH_K * (m - CRUSH_MC);
-    const r = BASE_R_WORLD * Math.sqrt(m / q);
+    const q = 1 + CRUSH_K * (m - CRUSH_MC);        // density multiplier grows linearly
+    const r = BASE_R_WORLD * Math.sqrt(m / q);     // denser → smaller radius than sqrt(m)
     return Math.max(1e-6, r);
   }
 
-  // Pre-allocated acceleration arrays (reused each frame)
-  const axTmp = new Float32Array(MAX_BODIES);
-  const ayTmp = new Float32Array(MAX_BODIES);
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 6a) Reused acceleration arrays (avoid new Float32Array each frame)
+  // ─────────────────────────────────────────────────────────────────────────────
+  let ax = new Float32Array(0);
+  let ay = new Float32Array(0);
+
+  function ensureAccelCapacity(n) {
+    if (ax.length < n) {
+      ax = new Float32Array(n);
+      ay = new Float32Array(n);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 6b) Reused broadphase buckets & ranges (avoid new Maps/arrays each frame)
+  // ─────────────────────────────────────────────────────────────────────────────
+  /** Map<number, string[]> bucketKey -> array of body IDs */
+  const buckets = new Map();
+  /** Map<string, {cx0:number,cx1:number,cy0:number,cy1:number}> */
+  const ranges = new Map();
+
+  function rangeForBody(b) {
+    // Reuse a single range object per body ID instead of allocating each frame.
+    let r = ranges.get(b.id);
+    if (!r) {
+      r = { cx0: 0, cx1: 0, cy0: 0, cy1: 0 };
+      ranges.set(b.id, r);
+    }
+    const cx0 = clampCx(Math.floor((b.x - b.rWorld) / BUCKET_SIZE));
+    const cx1 = clampCx(Math.floor((b.x + b.rWorld) / BUCKET_SIZE));
+    const cy0 = clampCy(Math.floor((b.y - b.rWorld) / BUCKET_SIZE));
+    const cy1 = clampCy(Math.floor((b.y + b.rWorld) / BUCKET_SIZE));
+    r.cx0 = cx0;
+    r.cx1 = cx1;
+    r.cy0 = cy0;
+    r.cy1 = cy1;
+    return r;
+  }
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 7) Spawning & merging
   // ─────────────────────────────────────────────────────────────────────────────
   function addCellBodyIfNeeded(x, y) {
-    // Density gating
     if (hash2D_u32(x, y) >= DENSITY_THR) return;
-
     const nk = nkey(x, y);
     if (consumedCells.has(nk)) return;
     if (activatedCells.has(nk)) return;
@@ -307,84 +309,69 @@
       vx0 += Math.sin(phase) * VBIAS_ADD;
     }
 
-    const idx = allocBodyIndex();
-    if (idx < 0) return; // out of space
-
-    bx[idx] = x + 0.5;
-    by[idx] = y + 0.5;
-    bvx[idx] = vx0;
-    bvy[idx] = vy0;
-    bm[idx] = mass;
-    br[idx] = radiusForMass(mass);
-    bEma[idx] = 0;
-    bCol[idx] = 0;
-    bSources[idx] = [nk];
-    alive[idx] = 1;
-
+    const id = cellId(x, y);
+    const rWorld = radiusForMass(mass);
+    bodies.set(id, {
+      id,
+      x: x + 0.5,
+      y: y + 0.5,
+      vx: vx0,
+      vy: vy0,
+      m: mass,
+      rWorld,
+      sources: [nk],
+      emaCps: 0,
+      collCount: 0
+    });
     activatedCells.add(nk);
   }
 
-  function mergeBodies(iA, iB) {
-    // Merge B into A, keep index A alive, kill B
-    const mA = bm[iA], mB = bm[iB];
-    const mSum = mA + mB;
+  function mergeBodies(bi, bj) {
+    const mSum = bi.m + bj.m;
+    const xNew  = (bi.x * bi.m + bj.x * bj.m) / mSum;
+    const yNew  = (bi.y * bi.m + bj.y * bj.m) / mSum;
+    const vxNew = (bi.vx * bi.m + bj.vx * bj.m) / mSum;
+    const vyNew = (bi.vy * bi.m + bj.vy * bj.m) / mSum;
 
-    if (mSum <= 0) {
-      killBody(iA);
-      killBody(iB);
-      return -1;
-    }
+    const sources = bi.sources.concat(bj.sources);
+    for (const s of sources) consumedCells.add(s);
 
-    const xNew  = (bx[iA] * mA + bx[iB] * mB) / mSum;
-    const yNew  = (by[iA] * mA + by[iB] * mB) / mSum;
-    const vxNew = (bvx[iA] * mA + bvx[iB] * mB) / mSum;
-    const vyNew = (bvy[iA] * mA + bvy[iB] * mB) / mSum;
+    const rWorldNew = radiusForMass(mSum);
+    const id = `m:${mergeIdCounter++}`;
+    const merged = {
+      id,
+      x: xNew,
+      y: yNew,
+      vx: vxNew,
+      vy: vyNew,
+      m: mSum,
+      rWorld: rWorldNew,
+      sources,
+      emaCps: (bi.emaCps * bi.m + bj.emaCps * bj.m) / (mSum || 1),
+      collCount: 0
+    };
 
-    // Merge sources
-    const srcA = bSources[iA] || [];
-    const srcB = bSources[iB] || [];
-    const mergedSources = srcA.concat(srcB);
-    bSources[iA] = mergedSources;
-    for (const s of mergedSources) consumedCells.add(s);
+    if (selectedId === bi.id || selectedId === bj.id) selectedId = id;
 
-    // EMA merge
-    const emaA = bEma[iA] || 0;
-    const emaB = bEma[iB] || 0;
-    const emaNew = (emaA * mA + emaB * mB) / mSum;
+    bodies.delete(bi.id);
+    bodies.delete(bj.id);
+    bodies.set(id, merged);
 
-    bx[iA] = xNew;
-    by[iA] = yNew;
-    bvx[iA] = vxNew;
-    bvy[iA] = vyNew;
-    bm[iA] = mSum;
-    br[iA] = radiusForMass(mSum);
-    bEma[iA] = emaNew;
-    bCol[iA] = 0;
-
-    // Kill B
-    killBody(iB);
-
-    // Selection follow-through
-    if (selectedIndex === iB) selectedIndex = iA;
-
-    return iA;
+    return merged;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 8) Barnes–Hut quadtree (array-based)
+  // 8) Barnes–Hut quadtree
   // ─────────────────────────────────────────────────────────────────────────────
-  function buildQuadTree(active) {
-    const n = active.length;
-    if (n === 0) return null;
+  function buildQuadTree(activeBodies) {
+    if (activeBodies.length === 0) return null;
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (let i = 0; i < n; i++) {
-      const idx = active[i];
-      const x = bx[idx], y = by[idx];
-      if (x < minX) minX = x;
-      if (y < minY) minY = y;
-      if (x > maxX) maxX = x;
-      if (y > maxY) maxY = y;
+    for (const b of activeBodies) {
+      if (b.x < minX) minX = b.x;
+      if (b.y < minY) minY = b.y;
+      if (b.x > maxX) maxX = b.x;
+      if (b.y > maxY) maxY = b.y;
     }
     const w = Math.max(1e-6, maxX - minX);
     const h = Math.max(1e-6, maxY - minY);
@@ -394,18 +381,30 @@
     const half = size * 0.5;
 
     function makeNode(cx, cy, half) {
-      return {
-        cx, cy, half,
-        m: 0, mx: 0, my: 0,
-        bodyIndex: -1,
-        children: null,
-        count: 0,
-        comX: cx,
-        comY: cy
-      };
+      return { cx, cy, half, m: 0, mx: 0, my: 0, body: null, children: null, count: 0 };
     }
 
     const root = makeNode(cx, cy, half);
+
+    function insert(node, b) {
+      node.count++;
+      node.m  += b.m;
+      node.mx += b.m * b.x;
+      node.my += b.m * b.y;
+
+      if (node.children === null) {
+        if (node.body === null) {
+          node.body = b;
+        } else {
+          const old = node.body; node.body = null;
+          node.children = split(node);
+          insert(childFor(node, old), old);
+          insert(childFor(node, b),   b);
+        }
+      } else {
+        insert(childFor(node, b), b);
+      }
+    }
 
     function split(node) {
       const h2 = node.half * 0.5;
@@ -418,143 +417,107 @@
       ];
     }
 
-    function childFor(node, idx) {
-      const x = bx[idx], y = by[idx];
-      const east = x >= node.cx;
-      const south = y >= node.cy;
+    function childFor(node, b) {
+      const east = b.x >= node.cx;
+      const south = b.y >= node.cy;
       if (!east && !south) return node.children[0];
       if ( east && !south) return node.children[1];
       if (!east &&  south) return node.children[2];
       return node.children[3];
     }
 
-    function insert(node, idx) {
-      const m = bm[idx];
-      const x = bx[idx], y = by[idx];
-
-      node.count++;
-      node.m  += m;
-      node.mx += m * x;
-      node.my += m * y;
-
-      if (!node.children) {
-        if (node.bodyIndex === -1) {
-          node.bodyIndex = idx;
-        } else {
-          const oldIdx = node.bodyIndex;
-          node.bodyIndex = -1;
-          node.children = split(node);
-          insert(childFor(node, oldIdx), oldIdx);
-          insert(childFor(node, idx), idx);
-        }
-      } else {
-        insert(childFor(node, idx), idx);
-      }
-    }
-
-    for (let i = 0; i < n; i++) {
-      insert(root, active[i]);
-    }
+    for (const b of activeBodies) insert(root, b);
 
     function finalize(node) {
-      if (node.count > 0 && node.m > 0) {
-        node.comX = node.mx / node.m;
-        node.comY = node.my / node.m;
+      if (node.count > 0) {
+        node.comX = node.mx / (node.m || 1);
+        node.comY = node.my / (node.m || 1);
       } else {
         node.comX = node.cx;
         node.comY = node.cy;
       }
-      if (node.children) {
-        for (const c of node.children) finalize(c);
-      }
+      if (node.children) for (const c of node.children) finalize(c);
     }
     finalize(root);
     return root;
   }
 
-  function accumulateForceFromTree(node, idx, axay) {
+  function accumulateForceFromTree(node, b, axay) {
     if (!node || node.count === 0) return;
-    if (node.children === null && node.bodyIndex === idx) return;
+    if (node.children === null && node.body === b) return;
 
-    const x = bx[idx], y = by[idx];
-    const dx = node.comX - x;
-    const dy = node.comY - y;
+    const dx = node.comX - b.x;
+    const dy = node.comY - b.y;
     const dist2 = dx*dx + dy*dy + SOFTENING2;
     const dist = Math.sqrt(dist2);
 
-    if (!node.children || (node.half * 2) / dist < THETA) {
+    if (node.children === null || (node.half * 2) / dist < THETA) {
       const invR3 = 1 / (dist2 * dist);
       const f = G * node.m * invR3;
       axay.ax += f * dx;
       axay.ay += f * dy;
     } else {
-      for (const c of node.children) accumulateForceFromTree(c, idx, axay);
+      for (const c of node.children) accumulateForceFromTree(c, b, axay);
     }
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 9) Collision response (bounce-only path, array-based)
+  // 9) Collision response (bounce-only path)
   // ─────────────────────────────────────────────────────────────────────────────
-  function resolveCollisionNoMerge(iA, iB) {
-    const ax = bx[iA], ay = by[iA];
-    const bxv = bx[iB], byv = by[iB];
+  function resolveCollisionNoMerge(a, b) {
+    const dx0 = b.x - a.x;
+    const dy0 = b.y - a.y;
+    let dist = Math.hypot(dx0, dy0) || 1e-9;
+    let nx = dx0 / dist;
+    let ny = dy0 / dist;
 
-    let dx = bxv - ax;
-    let dy = byv - ay;
-    let dist = Math.hypot(dx, dy) || 1e-9;
-
-    const nx = dx / dist;
-    const ny = dy / dist;
-
-    const rA = br[iA], rB = br[iB];
-    const sumR = rA + rB;
+    // Positional correction to avoid sinking
+    const sumR = a.rWorld + b.rWorld;
     const overlap = sumR - dist;
-
     if (overlap > 0) {
-      const invA = 1 / bm[iA];
-      const invB = 1 / bm[iB];
+      const invA = 1 / a.m;
+      const invB = 1 / b.m;
       const invSum = invA + invB;
       const corr = overlap / (invSum || 1e-9);
-
-      bx[iA] -= nx * corr * invA;
-      by[iA] -= ny * corr * invA;
-      bx[iB] += nx * corr * invB;
-      by[iB] += ny * corr * invB;
+      a.x -= nx * corr * invA;
+      a.y -= ny * corr * invA;
+      b.x += nx * corr * invB;
+      b.y += ny * corr * invB;
 
       // Recompute separation
-      dx = bx[iB] - bx[iA];
-      dy = by[iB] - by[iA];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
       dist = Math.hypot(dx, dy) || 1e-9;
+      nx = dx / dist;
+      ny = dy / dist;
     }
 
     // Relative velocity
-    const rvx = bvx[iB] - bvx[iA];
-    const rvy = bvy[iB] - bvy[iA];
+    const rvx = b.vx - a.vx;
+    const rvy = b.vy - a.vy;
 
-    const nx2 = dx / dist;
-    const ny2 = dy / dist;
-    const tx = -ny2;
-    const ty = nx2;
+    const tx = -ny;
+    const ty = nx;
 
-    const vn = rvx * nx2 + rvy * ny2;
-    if (vn > 0) return; // separating
+    const vn = rvx * nx + rvy * ny;   // approach speed
+    if (vn > 0) return;               // already separating
 
     const vt = rvx * tx + rvy * ty;
 
-    const invA = 1 / bm[iA];
-    const invB = 1 / bm[iB];
+    const invA = 1 / a.m;
+    const invB = 1 / b.m;
     const invSum = invA + invB;
 
     // Normal impulse with restitution
     const e = REST_E;
     const jn = -(1 + e) * vn / (invSum || 1e-9);
-    const jnx = jn * nx2;
-    const jny = jn * ny2;
+    const jnx = jn * nx;
+    const jny = jn * ny;
 
-    bvx[iA] -= jnx * invA;
-    bvy[iA] -= jny * invA;
-    bvx[iB] += jnx * invB;
-    bvy[iB] += jny * invB;
+    a.vx -= jnx * invA;
+    a.vy -= jny * invA;
+    b.vx += jnx * invB;
+    b.vy += jny * invB;
 
     // Tangential (Coulomb) friction impulse
     let jt = -vt / (invSum || 1e-9);
@@ -565,10 +528,10 @@
     const jtx = jt * tx;
     const jty = jt * ty;
 
-    bvx[iA] -= jtx * invA;
-    bvy[iA] -= jty * invA;
-    bvx[iB] += jtx * invB;
-    bvy[iB] += jty * invB;
+    a.vx -= jtx * invA;
+    a.vy -= jty * invA;
+    b.vx += jtx * invB;
+    b.vy += jty * invB;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -577,13 +540,12 @@
   function simulate(dt, viewBounds) {
     const { x0, y0, x1, y1 } = viewBounds;
 
-    // Active list: visible bodies only
+    // Active list
     const active = [];
-    for (let i = 0; i < bodyCount; i++) {
-      if (!alive[i]) continue;
-      const x = bx[i], y = by[i], r = br[i];
-      if (x + r < x0 || y + r < y0 || x - r > x1 || y - r > y1) continue;
-      active.push(i);
+    for (const b of bodies.values()) {
+      if (b.x + b.rWorld < x0 || b.y + b.rWorld < y0 ||
+          b.x - b.rWorld > x1 || b.y - b.rWorld > y1) continue;
+      active.push(b);
     }
     const n = active.length;
     if (n === 0) {
@@ -593,6 +555,9 @@
       return;
     }
 
+    // Ensure acceleration arrays are large enough
+    ensureAccelCapacity(n);
+
     // Gravity timings
     const tTree0 = performance.now();
     const root = buildQuadTree(active);
@@ -600,24 +565,24 @@
     const treeMs = tTree1 - tTree0;
 
     const tForce0 = performance.now();
-    for (let k = 0; k < n; k++) {
-      const idx = active[k];
+    for (let i = 0; i < n; i++) {
+      const b = active[i];
       const acc = { ax: 0, ay: 0 };
-      accumulateForceFromTree(root, idx, acc);
-      axTmp[idx] = acc.ax;
-      ayTmp[idx] = acc.ay;
+      accumulateForceFromTree(root, b, acc);
+      ax[i] = acc.ax;
+      ay[i] = acc.ay;
     }
     const tForce1 = performance.now();
     lastGravMs = treeMs + (tForce1 - tForce0);
 
     // Integration
     const tInt0 = performance.now();
-    for (let k = 0; k < n; k++) {
-      const idx = active[k];
+    for (let i = 0; i < n; i++) {
+      const b = active[i];
 
       // Thrusters on selected body
       let addAX = 0, addAY = 0;
-      if (idx === selectedIndex) {
+      if (selectedId && b.id === selectedId) {
         let dx = 0, dy = 0;
         if (keyA) dx -= 1;
         if (keyD) dx += 1;
@@ -632,44 +597,42 @@
         }
       }
 
-      bvx[idx] += (axTmp[idx] + addAX) * dt;
-      bvy[idx] += (ayTmp[idx] + addAY) * dt;
-      bx[idx]  += bvx[idx] * dt;
-      by[idx]  += bvy[idx] * dt;
+      b.vx += (ax[i] + addAX) * dt;
+      b.vy += (ay[i] + addAY) * dt;
+      b.x  += b.vx * dt;
+      b.y  += b.vy * dt;
     }
     const tInt1 = performance.now();
     lastIntegrateMs = tInt1 - tInt0;
 
-    // Broad phase with buckets
+    // Broad phase with buckets (reused)
     const tColl0 = performance.now();
 
-    /** Map<number, number[]> bucketKey -> indices */
-    const buckets = new Map();
-    /** Map<number, {cx0,cx1,cy0,cy1}> per body index */
-    const ranges = new Map();
-
-    function rangeForBody(idx) {
-      const r = br[idx];
-      const x = bx[idx], y = by[idx];
-      const cx0 = clampCx(Math.floor((x - r) / BUCKET_SIZE));
-      const cx1 = clampCx(Math.floor((x + r) / BUCKET_SIZE));
-      const cy0 = clampCy(Math.floor((y - r) / BUCKET_SIZE));
-      const cy1 = clampCy(Math.floor((y + r) / BUCKET_SIZE));
-      return { cx0, cx1, cy0, cy1 };
+    // Clear all bucket arrays instead of creating new ones
+    for (const arr of buckets.values()) {
+      arr.length = 0;
     }
 
-    for (let a = 0; a < n; a++) {
-      const idx = active[a];
-      const r = rangeForBody(idx);
-      ranges.set(idx, r);
+    // We do NOT clear ranges; rangeForBody reuses/updates objects per body ID.
+
+    function insertBodyIntoBuckets(body) {
+      const r = rangeForBody(body);
       for (let cy = r.cy0; cy <= r.cy1; cy++) {
         for (let cx = r.cx0; cx <= r.cx1; cx++) {
           const key = bkKey(cx, cy);
           let arr = buckets.get(key);
-          if (!arr) { arr = []; buckets.set(key, arr); }
-          arr.push(idx);
+          if (!arr) {
+            arr = [];
+            buckets.set(key, arr);
+          }
+          arr.push(body.id);
         }
       }
+    }
+
+    for (const b of active) {
+      // compute & store range, and fill buckets
+      insertBodyIntoBuckets(b);
     }
 
     function isCanonicalBucket(cx, cy, rA, rB) {
@@ -684,38 +647,46 @@
       const cy = key - cx * BUCKET_STRIDE;
 
       for (let i = 0; i < arr.length; i++) {
-        const idxA = arr[i];
-        if (!alive[idxA]) continue;
+        let idA = arr[i];
+        let a = bodies.get(idA);
+        if (!a) continue;
 
         for (let j = i + 1; j < arr.length; j++) {
-          const idxB = arr[j];
-          if (!alive[idxB]) continue;
-          if (idxA === idxB) continue;
+          const idB = arr[j];
+          const b = bodies.get(idB);
+          if (!b || idA === idB) continue;
 
-          const rA = ranges.get(idxA);
-          const rB = ranges.get(idxB);
+          const rA = ranges.get(idA);
+          const rB = ranges.get(idB);
           if (!rA || !rB) continue;
 
           if (!isCanonicalBucket(cx, cy, rA, rB)) continue;
 
-          const dx = bx[idxB] - bx[idxA];
-          const dy = by[idxB] - by[idxA];
-          const sumR = br[idxA] + br[idxB];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const sumR = a.rWorld + b.rWorld;
           if (dx*dx + dy*dy <= sumR*sumR) {
             // Count this collision for EMA (both bodies)
-            bCol[idxA] = (bCol[idxA] || 0) + 1;
-            bCol[idxB] = (bCol[idxB] || 0) + 1;
+            a.collCount = (a.collCount || 0) + 1;
+            b.collCount = (b.collCount || 0) + 1;
 
-            // Sticky logic
-            const stickyA = (bEma[idxA] || 0) >= STICKY_THR;
-            const stickyB = (bEma[idxB] || 0) >= STICKY_THR;
+            // Sticky logic: BOTH bodies must exceed STICKY_THR and merging must be enabled
+            const stickyA = (a.emaCps || 0) >= STICKY_THR;
+            const stickyB = (b.emaCps || 0) >= STICKY_THR;
             const wantMerge = MERGE_ON && stickyA && stickyB;
 
             if (wantMerge) {
-              mergeBodies(idxA, idxB);
-              // buckets/ranges will be rebuilt next frame; we just skip idxB
+              const merged = mergeBodies(a, b);
+              ranges.delete(idA);
+              ranges.delete(idB);
+              insertBodyIntoBuckets(merged);
+              idA = merged.id;
+              a = merged;
+              arr[i] = idA;
+              j = i; // restart comparisons for this i with the merged body
             } else {
-              resolveCollisionNoMerge(idxA, idxB);
+              // Bounce (no unconditional merging anymore)
+              resolveCollisionNoMerge(a, b);
             }
           }
         }
@@ -728,12 +699,10 @@
     // Update EMA CPS for all active bodies
     if (dt > 0) {
       const alpha = 1 - Math.exp(-dt / EMA_TAU);
-      for (let k = 0; k < n; k++) {
-        const idx = active[k];
-        const inst = (bCol[idx] || 0) / dt;
-        const old = bEma[idx] || 0;
-        bEma[idx] = old + alpha * (inst - old);
-        bCol[idx] = 0;
+      for (const b of active) {
+        const inst = (b.collCount || 0) / dt;
+        b.emaCps = (b.emaCps || 0) + alpha * (inst - (b.emaCps || 0));
+        b.collCount = 0;
       }
     }
   }
@@ -749,7 +718,6 @@
       for (let x = x0; x < x1; x++) addCellBodyIfNeeded(x, y);
     }
   }
-
   function spawnNewlyRevealed(curr) {
     if (prevX0 === null) {
       spawnRect(curr.x0, curr.x1, curr.y0, curr.y1);
@@ -793,19 +761,16 @@
     const y1 = Math.min(WORLD_SIZE, Math.ceil(viewY + h / scale));
     const viewBounds = { x0, y0, x1, y1 };
 
-    // Frame dt for controls (used when sim is inactive)
+    // Frame dt for controls
     const now = performance.now() * 0.001;
     let dtFrame = 0;
     if (lastFrameTime == null) lastFrameTime = now;
-    else {
-      dtFrame = Math.min(0.1, Math.max(0, now - lastFrameTime));
-      lastFrameTime = now;
-    }
+    else { dtFrame = Math.min(0.1, Math.max(0, now - lastFrameTime)); lastFrameTime = now; }
 
-    const activeSim = simActive();
+    const active = simActive();
 
     // Spawn
-    if (activeSim) {
+    if (active) {
       const tSpawn0 = performance.now();
       spawnNewlyRevealed(viewBounds);
       const tSpawn1 = performance.now();
@@ -821,52 +786,48 @@
 
     // Physics step
     let dt = 0;
-    if (activeSim) {
+    if (active) {
       const nowS = performance.now() * 0.001;
       if (lastSimTime == null) lastSimTime = nowS;
-      else {
-        dt = Math.min(MAX_DT, Math.max(0, nowS - lastSimTime));
-        lastSimTime = nowS;
-      }
+      else { dt = Math.min(MAX_DT, Math.max(0, nowS - lastSimTime)); lastSimTime = nowS; }
       if (dt > 0) simulate(dt, viewBounds);
-    } else if (selectedIndex >= 0 && (keyW || keyA || keyS || keyD)) {
-      // Manual thrust when gravity is inactive (zoomed out)
-      if (alive[selectedIndex]) {
+    } else if (selectedId && (keyW || keyA || keyS || keyD)) {
+      const b = bodies.get(selectedId);
+      if (b) {
         let dx = 0, dy = 0;
-        if (keyA) dx -= 1;
-        if (keyD) dx += 1;
-        if (keyW) dy -= 1;
-        if (keyS) dy += 1;
+        if (keyA) dx -= 1; if (keyD) dx += 1;
+        if (keyW) dy -= 1; if (keyS) dy += 1;
         if (dx !== 0 || dy !== 0) {
           const inv = 1 / Math.hypot(dx, dy);
           dx *= inv; dy *= inv;
           const CONTROL_ACCEL = 25.0;
-          bvx[selectedIndex] += CONTROL_ACCEL * dx * dtFrame;
-          bvy[selectedIndex] += CONTROL_ACCEL * dy * dtFrame;
-          bx[selectedIndex]  += bvx[selectedIndex] * dtFrame;
-          by[selectedIndex]  += bvy[selectedIndex] * dtFrame;
+          b.vx += CONTROL_ACCEL * dx * dtFrame;
+          b.vy += CONTROL_ACCEL * dy * dtFrame;
+          b.x  += b.vx * dtFrame;
+          b.y  += b.vy * dtFrame;
         }
       }
     }
 
     // Camera follow
-    if (followSelected && selectedIndex >= 0 && alive[selectedIndex]) {
-      const vw = viewportWorldWidth();
-      const vh = viewportWorldHeight();
-      viewX = bx[selectedIndex] - vw / 2;
-      viewY = by[selectedIndex] - vh / 2;
-      clampView();
+    if (followSelected && selectedId) {
+      const b = bodies.get(selectedId);
+      if (b) {
+        const vw = viewportWorldWidth();
+        const vh = viewportWorldHeight();
+        viewX = b.x - vw / 2;
+        viewY = b.y - vh / 2;
+        clampView();
+      }
     }
 
     // Draw bodies
     const tDraw0 = performance.now();
     ctx.beginPath();
-    for (let i = 0; i < bodyCount; i++) {
-      if (!alive[i]) continue;
-      const x = bx[i], y = by[i], r = br[i];
-      const cx = (x - viewX) * scale;
-      const cy = (y - viewY) * scale;
-      const rpx = r * scale;
+    for (const b of bodies.values()) {
+      const cx = (b.x - viewX) * scale;
+      const cy = (b.y - viewY) * scale;
+      const rpx = b.rWorld * scale;
       if (cx + rpx < 0 || cy + rpx < 0 || cx - rpx > w || cy - rpx > h) continue;
       ctx.moveTo(cx + rpx, cy);
       ctx.arc(cx, cy, rpx, 0, Math.PI * 2);
@@ -875,21 +836,24 @@
     ctx.fill();
 
     // Highlight selected
-    if (selectedIndex >= 0 && alive[selectedIndex]) {
-      const x = bx[selectedIndex], y = by[selectedIndex], r = br[selectedIndex];
-      const cx = (x - viewX) * scale;
-      const cy = (y - viewY) * scale;
-      const rpx = r * scale;
-      if (!(cx + rpx < 0 || cy + rpx < 0 || cx - rpx > w || cy - rpx > h)) {
-        ctx.beginPath();
-        ctx.arc(cx, cy, rpx, 0, Math.PI * 2);
-        ctx.lineWidth = Math.max(2, 4 * (window.devicePixelRatio || 1));
-        ctx.strokeStyle = '#33aaff';
-        ctx.stroke();
+    if (selectedId) {
+      const b = bodies.get(selectedId);
+      if (b) {
+        const cx = (b.x - viewX) * scale;
+        const cy = (b.y - viewY) * scale;
+        const rpx = b.rWorld * scale;
+        if (!(cx + rpx < 0 || cy + rpx < 0 || cx - rpx > w || cy - rpx > h)) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, rpx, 0, Math.PI * 2);
+          ctx.lineWidth = Math.max(2, 4 * (window.devicePixelRatio || 1));
+          ctx.strokeStyle = '#33aaff';
+          ctx.stroke();
+        }
+        // Optional: show selected emaCps if a HUD span exists
+        if (emaVal) emaVal.textContent = (b.emaCps || 0).toFixed(1) + ' cps';
+      } else {
+        selectedId = null;
       }
-      if (emaVal) emaVal.textContent = (bEma[selectedIndex] || 0).toFixed(1) + ' cps';
-    } else if (selectedIndex >= 0 && !alive[selectedIndex]) {
-      selectedIndex = -1;
     }
 
     const tDraw1 = performance.now();
@@ -949,20 +913,19 @@
   // 14) Picking & input
   // ─────────────────────────────────────────────────────────────────────────────
   function pickBodyAt(worldX, worldY) {
-    let best = -1;
+    let best = null;
     let bestD2 = Infinity;
-    for (let i = 0; i < bodyCount; i++) {
-      if (!alive[i]) continue;
-      const dx = worldX - bx[i];
-      const dy = worldY - by[i];
-      const rPick = Math.max(br[i], MIN_CLICK_RADIUS);
+    for (const b of bodies.values()) {
+      const dx = worldX - b.x;
+      const dy = worldY - b.y;
+      const rPick = Math.max(b.rWorld, MIN_CLICK_RADIUS);
       const d2 = dx*dx + dy*dy;
       if (d2 <= rPick * rPick && d2 < bestD2) {
         bestD2 = d2;
-        best = i;
+        best = b;
       }
     }
-    return best;
+    return best ? best.id : null;
   }
 
   let dragging = false;
@@ -1001,7 +964,7 @@
         const my = (e.clientY - rect.top ) * (canvas.height / canvas.clientHeight);
         const worldX = viewX + (mx / scale);
         const worldY = viewY + (my / scale);
-        selectedIndex = pickBodyAt(worldX, worldY);
+        selectedId = pickBodyAt(worldX, worldY);
         requestRender();
       }
     }
@@ -1035,22 +998,18 @@
 
   function handleKey(e, down) {
     const k = e.key.toLowerCase();
-    if (k === 'w') { keyW = down; if (selectedIndex >= 0) e.preventDefault(); }
-    else if (k === 'a') { keyA = down; if (selectedIndex >= 0) e.preventDefault(); }
-    else if (k === 's') { keyS = down; if (selectedIndex >= 0) e.preventDefault(); }
-    else if (k === 'd') { keyD = down; if (selectedIndex >= 0) e.preventDefault(); }
-    else if (k === 'escape' && down) { selectedIndex = -1; requestRender(); }
-    else if (k === 'f' && down) {
-      followSelected = !followSelected;
-      if (followVal) followVal.textContent = followSelected ? 'On' : 'Off';
-      requestRender();
-    }
+    if (k === 'w') { keyW = down; if (selectedId) e.preventDefault(); }
+    else if (k === 'a') { keyA = down; if (selectedId) e.preventDefault(); }
+    else if (k === 's') { keyS = down; if (selectedId) e.preventDefault(); }
+    else if (k === 'd') { keyD = down; if (selectedId) e.preventDefault(); }
+    else if (k === 'escape' && down) { selectedId = null; requestRender(); }
+    else if (k === 'f' && down) { followSelected = !followSelected; if (followVal) followVal.textContent = followSelected ? 'On' : 'Off'; requestRender(); }
   }
   window.addEventListener('keydown', (e) => handleKey(e, true), { passive: false });
   window.addEventListener('keyup',   (e) => handleKey(e, false), { passive: false });
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 15) HUD controls
+  // 15) HUD controls (only attach if present)
   // ─────────────────────────────────────────────────────────────────────────────
   function updateG(newG) {
     G = Math.min(G_MAX, Math.max(G_MIN, newG));
@@ -1182,7 +1141,7 @@
   })();
 
   (function tick() {
-    if (dragging || simActive() || selectedIndex >= 0 || followSelected) requestRender();
+    if (dragging || simActive() || selectedId || followSelected) requestRender();
     requestAnimationFrame(tick);
   })();
 })();
