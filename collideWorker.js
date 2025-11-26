@@ -1,16 +1,18 @@
 // collideWorker.js
-// Collision detection with constant-velocity prediction:
-// given x, y, r, vx, vy, dt, we predict future positions and detect overlaps.
+// Collision detection with constant-acceleration prediction.
+// Given x, y, r, vx, vy, ax, ay, dt, we predict future positions and detect overlaps.
 
 self.onmessage = function (e) {
-  const { jobId, xs, ys, rs, vxs, vys, dt, count } = e.data;
+  const { jobId, xs, ys, rs, vxs, vys, axs, ays, dt, count } = e.data;
 
-  // Predict forward with constant velocity:
-  // x_pred = x + vx * dt, y_pred = y + vy * dt
-  // We reuse xs/ys in-place because they are transferred and not needed by main.
+  // Predict forward with constant acceleration:
+  // x_pred = x + vx*dt + 0.5*ax*dt^2
+  // y_pred = y + vy*dt + 0.5*ay*dt^2
+  // We reuse xs/ys in-place because their buffers are transferred.
+  const halfDt2 = 0.5 * dt * dt;
   for (let i = 0; i < count; i++) {
-    xs[i] += vxs[i] * dt;
-    ys[i] += vys[i] * dt;
+    xs[i] += vxs[i] * dt + axs[i] * halfDt2;
+    ys[i] += vys[i] * dt + ays[i] * halfDt2;
   }
 
   const pairs = detectCollisions(xs, ys, rs, count);
@@ -18,13 +20,14 @@ self.onmessage = function (e) {
 };
 
 function detectCollisions(xs, ys, rs, count) {
-  const BUCKET_SIZE = 2.0;
-  const WORLD_SIZE  = 1_000_000;
-  const MAX_CX = Math.floor(WORLD_SIZE / BUCKET_SIZE);
-  const MAX_CY = Math.floor(WORLD_SIZE / BUCKET_SIZE);
+  const BUCKET_SIZE   = 2.0;
+  const WORLD_SIZE    = 1_000_000;
+  const MAX_CX        = Math.floor(WORLD_SIZE / BUCKET_SIZE);
+  const MAX_CY        = Math.floor(WORLD_SIZE / BUCKET_SIZE);
   const BUCKET_STRIDE = 2_000_000;
 
-  const ranges = new Int32Array(count * 4); // [cx0, cx1, cy0, cy1] per body
+  // ranges: [cx0, cx1, cy0, cy1] per body
+  const ranges = new Int32Array(count * 4);
   const buckets = new Map();
 
   function clamp(v, lo, hi) {
@@ -90,7 +93,7 @@ function detectCollisions(xs, ys, rs, count) {
         const bCx0 = ranges[offB + 0];
         const bCy0 = ranges[offB + 2];
 
-        // canonical bucket: use max of cx0/cy0
+        // canonical bucket: max of cx0/cy0
         const cxCanon = Math.max(aCx0, bCx0);
         const cyCanon = Math.max(aCy0, bCy0);
         if (cx !== cxCanon || cy !== cyCanon) continue;
