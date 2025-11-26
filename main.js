@@ -45,39 +45,37 @@
   const V0_STEP = 1.1;
 
   // Spawn-time horizontal velocity band bias (kept from prior version)
-  let   VBIAS_BAND_H = 250;    // world units per band (defaults you requested earlier)
+  let   VBIAS_BAND_H = 250;    // world units per band
   let   VBIAS_ADD    = 2.0;    // added vx amplitude (units/s)
 
-  // Linear “crush” density rule (kept; safe defaults)
-  let   CRUSH_K  = 0.0001;     // slope after threshold
-  let   CRUSH_MC = 1000;       // mass where crush starts
-  const CRUSH_K_MIN  = 0;
-  const CRUSH_K_MAX  = 1;
-  const CRUSH_MC_MIN = 0;
-  const CRUSH_MC_MAX = 1e6;
+  // Linear “crush” density rule
+  let   CRUSH_K  = 0.0001;
+  let   CRUSH_MC = 1000;
+  const CRUSH_K_MIN=0, CRUSH_K_MAX=1;
+  const CRUSH_MC_MIN=0, CRUSH_MC_MAX=1e6;
 
   // Merge & collision response
-  let   MERGE_ON    = true;    // HUD toggle should control this if present
-  let   STICKY_THR  = 800;     // EMA collisions/sec threshold
-  let   REST_E      = 0.2;     // coefficient of restitution
-  let   FRICTION_MU = 0.02;    // tangential (Coulomb) friction at contact
-  const STICKY_STEP = 1.2;     // generic steps for +/- buttons if present
+  let   MERGE_ON    = true;
+  let   STICKY_THR  = 800;
+  let   REST_E      = 0.2;
+  let   FRICTION_MU = 0.02;
+  const STICKY_STEP = 1.2;
   const REST_STEP   = 1.1;
   const FRICT_STEP  = 1.1;
 
   // EMA smoothing for collisions/sec
-  const EMA_TAU = 1; // seconds (time-constant)
+  const EMA_TAU = 1; // seconds
 
   // Picking
   const MIN_CLICK_AREA = 5;
   const MIN_CLICK_RADIUS = Math.sqrt(MIN_CLICK_AREA / Math.PI);
 
-  // Spatial hashing for collisions (multi-bucket with canonical bucket)
-  const BUCKET_SIZE   = 2.0;
-  const MAX_CX        = Math.floor(WORLD_SIZE / BUCKET_SIZE);
-  const MAX_CY        = Math.floor(WORLD_SIZE / BUCKET_SIZE);
+  // Spatial hashing for collisions (main copy here still used for constants)
+  const BUCKET_SIZE = 2.0;
+  const MAX_CX = Math.floor(WORLD_SIZE / BUCKET_SIZE);
+  const MAX_CY = Math.floor(WORLD_SIZE / BUCKET_SIZE);
   const BUCKET_STRIDE = 2_000_000;
-  const bkKey   = (cx, cy) => cx * BUCKET_STRIDE + cy;
+  const bkKey = (cx, cy) => cx * BUCKET_STRIDE + cy;
   const clampCx = (cx) => Math.min(MAX_CX, Math.max(0, cx));
   const clampCy = (cy) => Math.min(MAX_CY, Math.max(0, cy));
 
@@ -95,7 +93,7 @@
   const gMinusBtn = document.getElementById('gMinus');
   const gPlusBtn  = document.getElementById('gPlus');
 
-  const vmaxVal = document.getElementElementById?.('vmaxVal') || document.getElementById('vmaxVal');
+  const vmaxVal = document.getElementById('vmaxVal');
   const vmaxMinusBtn = document.getElementById('vmaxMinus');
   const vmaxPlusBtn  = document.getElementById('vmaxPlus');
 
@@ -144,12 +142,12 @@
   const vbiasMinus    = document.getElementById('vbiasMinus');
   const vbiasPlus     = document.getElementById('vbiasPlus');
 
-  const emaVal        = document.getElementById('emaVal');     // selected body's EMA CPS (optional)
+  const emaVal        = document.getElementById('emaVal'); // optional
 
   // ─────────────────────────────────────────────────────────────────────────────
   // 3) Viewport state & helpers
   // ─────────────────────────────────────────────────────────────────────────────
-  let scale = 2;      // starting zoom
+  let scale = 2;
   let viewX = 0;
   let viewY = 0;
 
@@ -201,9 +199,8 @@
   // ─────────────────────────────────────────────────────────────────────────────
   /**
    * Body fields:
-   *  id, x, y, vx, vy, m, rWorld, sources[], emaCps, collCount
+   *  id, x, y, vx, vy, m, rWorld, sources[], emaCps, collCount, alive
    */
-  /** @type {Map<string, {id:string,x:number,y:number,vx:number,vy:number,m:number,rWorld:number,sources:number[], emaCps:number, collCount:number}>} */
   const bodies = new Map();
   const activatedCells = new Set();
   const consumedCells  = new Set();
@@ -215,7 +212,7 @@
   // Perf metrics (ms)
   let lastGravMs = 0.0;
   let lastSpawnMs = 0.0;
-  let lastCollideMs = 0.0;
+  let lastCollideMs = 0.0;  // now only measures main-thread collision *response*
   let lastIntegrateMs = 0.0;
   let lastRenderMs = 0.0;
   let lastTotalMs = 0.0;
@@ -238,51 +235,12 @@
 
   function cellId(x, y) { return `c:${x},${y}`; }
 
-  // Mass→radius with linear crush (safe default)
+  // Mass→radius with linear crush
   function radiusForMass(m) {
     if (m <= CRUSH_MC) return BASE_R_WORLD * Math.sqrt(m);
-    const q = 1 + CRUSH_K * (m - CRUSH_MC);        // density multiplier grows linearly
-    const r = BASE_R_WORLD * Math.sqrt(m / q);     // denser → smaller radius than sqrt(m)
+    const q = 1 + CRUSH_K * (m - CRUSH_MC);
+    const r = BASE_R_WORLD * Math.sqrt(m / q);
     return Math.max(1e-6, r);
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // 6a) Reused acceleration arrays (avoid new Float32Array each frame)
-  // ─────────────────────────────────────────────────────────────────────────────
-  let ax = new Float32Array(0);
-  let ay = new Float32Array(0);
-
-  function ensureAccelCapacity(n) {
-    if (ax.length < n) {
-      ax = new Float32Array(n);
-      ay = new Float32Array(n);
-    }
-  }
-
-  // ─────────────────────────────────────────────────────────────────────────────
-  // 6b) Reused broadphase buckets & ranges (avoid new Maps/arrays each frame)
-  // ─────────────────────────────────────────────────────────────────────────────
-  /** Map<number, string[]> bucketKey -> array of body IDs */
-  const buckets = new Map();
-  /** Map<string, {cx0:number,cx1:number,cy0:number,cy1:number}> */
-  const ranges = new Map();
-
-  function rangeForBody(b) {
-    // Reuse a single range object per body ID instead of allocating each frame.
-    let r = ranges.get(b.id);
-    if (!r) {
-      r = { cx0: 0, cx1: 0, cy0: 0, cy1: 0 };
-      ranges.set(b.id, r);
-    }
-    const cx0 = clampCx(Math.floor((b.x - b.rWorld) / BUCKET_SIZE));
-    const cx1 = clampCx(Math.floor((b.x + b.rWorld) / BUCKET_SIZE));
-    const cy0 = clampCy(Math.floor((b.y - b.rWorld) / BUCKET_SIZE));
-    const cy1 = clampCy(Math.floor((b.y + b.rWorld) / BUCKET_SIZE));
-    r.cx0 = cx0;
-    r.cx1 = cx1;
-    r.cy0 = cy0;
-    r.cy1 = cy1;
-    return r;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -297,13 +255,11 @@
     const sMul = sizeMulAt(x, y);
     const mass = Math.pow(sMul, 2);
 
-    // Deterministic orientation & speed
     const ang = 2 * Math.PI * hash01(x + 4242, y + 7777);
     const speed = 1 + (V0_MAX - 1) * hash01(x + 31415, y + 2718);
     let vx0 = Math.cos(ang) * speed;
     let vy0 = Math.sin(ang) * speed;
 
-    // Add banded horizontal velocity bias
     if (VBIAS_BAND_H > 0 && isFinite(VBIAS_BAND_H)) {
       const phase = (2 * Math.PI * (y)) / VBIAS_BAND_H;
       vx0 += Math.sin(phase) * VBIAS_ADD;
@@ -321,15 +277,20 @@
       rWorld,
       sources: [nk],
       emaCps: 0,
-      collCount: 0
+      collCount: 0,
+      alive: true
     });
     activatedCells.add(nk);
   }
 
   function mergeBodies(bi, bj) {
+    // Mark originals as not alive
+    bi.alive = false;
+    bj.alive = false;
+
     const mSum = bi.m + bj.m;
-    const xNew  = (bi.x * bi.m + bj.x * bj.m) / mSum;
-    const yNew  = (bi.y * bi.m + bj.y * bj.m) / mSum;
+    const xNew = (bi.x * bi.m + bj.x * bj.m) / mSum;
+    const yNew = (bi.y * bi.m + bj.y * bj.m) / mSum;
     const vxNew = (bi.vx * bi.m + bj.vx * bj.m) / mSum;
     const vyNew = (bi.vy * bi.m + bj.vy * bj.m) / mSum;
 
@@ -348,7 +309,8 @@
       rWorld: rWorldNew,
       sources,
       emaCps: (bi.emaCps * bi.m + bj.emaCps * bj.m) / (mSum || 1),
-      collCount: 0
+      collCount: 0,
+      alive: true
     };
 
     if (selectedId === bi.id || selectedId === bj.id) selectedId = id;
@@ -361,7 +323,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 8) Barnes–Hut quadtree
+  // 8) Barnes–Hut quadtree (unchanged)
   // ─────────────────────────────────────────────────────────────────────────────
   function buildQuadTree(activeBodies) {
     if (activeBodies.length === 0) return null;
@@ -410,10 +372,10 @@
       const h2 = node.half * 0.5;
       const cx = node.cx, cy = node.cy;
       return [
-        makeNode(cx - h2, cy - h2, h2), // NW
-        makeNode(cx + h2, cy - h2, h2), // NE
-        makeNode(cx - h2, cy + h2, h2), // SW
-        makeNode(cx + h2, cy + h2, h2)  // SE
+        makeNode(cx - h2, cy - h2, h2),
+        makeNode(cx + h2, cy - h2, h2),
+        makeNode(cx - h2, cy + h2, h2),
+        makeNode(cx + h2, cy + h2, h2)
       ];
     }
 
@@ -462,16 +424,15 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 9) Collision response (bounce-only path)
+  // 9) Collision response (bounce-only path, unchanged)
   // ─────────────────────────────────────────────────────────────────────────────
   function resolveCollisionNoMerge(a, b) {
-    const dx0 = b.x - a.x;
-    const dy0 = b.y - a.y;
-    let dist = Math.hypot(dx0, dy0) || 1e-9;
-    let nx = dx0 / dist;
-    let ny = dy0 / dist;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const dist = Math.hypot(dx, dy) || 1e-9;
+    const nx = dx / dist;
+    const ny = dy / dist;
 
-    // Positional correction to avoid sinking
     const sumR = a.rWorld + b.rWorld;
     const overlap = sumR - dist;
     if (overlap > 0) {
@@ -483,66 +444,45 @@
       a.y -= ny * corr * invA;
       b.x += nx * corr * invB;
       b.y += ny * corr * invB;
-
-      // Recompute separation
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      dist = Math.hypot(dx, dy) || 1e-9;
-      nx = dx / dist;
-      ny = dy / dist;
     }
 
-    // Relative velocity
     const rvx = b.vx - a.vx;
     const rvy = b.vy - a.vy;
 
-    const tx = -ny;
-    const ty = nx;
+    const vn = rvx * nx + rvy * ny;
+    if (vn > 0) return;
 
-    const vn = rvx * nx + rvy * ny;   // approach speed
-    if (vn > 0) return;               // already separating
-
+    const tx = -ny, ty = nx;
     const vt = rvx * tx + rvy * ty;
 
     const invA = 1 / a.m;
     const invB = 1 / b.m;
     const invSum = invA + invB;
 
-    // Normal impulse with restitution
     const e = REST_E;
     const jn = -(1 + e) * vn / (invSum || 1e-9);
-    const jnx = jn * nx;
-    const jny = jn * ny;
+    const jnx = jn * nx, jny = jn * ny;
+    a.vx -= jnx * invA; a.vy -= jny * invA;
+    b.vx += jnx * invB; b.vy += jny * invB;
 
-    a.vx -= jnx * invA;
-    a.vy -= jny * invA;
-    b.vx += jnx * invB;
-    b.vy += jny * invB;
-
-    // Tangential (Coulomb) friction impulse
     let jt = -vt / (invSum || 1e-9);
     const jtMax = FRICTION_MU * Math.abs(jn);
     if (jt >  jtMax) jt =  jtMax;
     if (jt < -jtMax) jt = -jtMax;
-
-    const jtx = jt * tx;
-    const jty = jt * ty;
-
-    a.vx -= jtx * invA;
-    a.vy -= jty * invA;
-    b.vx += jtx * invB;
-    b.vy += jty * invB;
+    const jtx = jt * tx, jty = jt * ty;
+    a.vx -= jtx * invA; a.vy -= jty * invA;
+    b.vx += jtx * invB; b.vy += jty * invB;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 10) Simulation (forces, integration, collisions)
+  // 10) Simulation (forces + integration only; collisions moved to worker)
   // ─────────────────────────────────────────────────────────────────────────────
   function simulate(dt, viewBounds) {
     const { x0, y0, x1, y1 } = viewBounds;
 
-    // Active list
     const active = [];
     for (const b of bodies.values()) {
+      if (!b.alive) continue;
       if (b.x + b.rWorld < x0 || b.y + b.rWorld < y0 ||
           b.x - b.rWorld > x1 || b.y - b.rWorld > y1) continue;
       active.push(b);
@@ -551,18 +491,17 @@
     if (n === 0) {
       lastGravMs = 0;
       lastIntegrateMs = 0;
-      lastCollideMs = 0;
-      return;
+      // collisions handled separately now
+      return { active };
     }
 
-    // Ensure acceleration arrays are large enough
-    ensureAccelCapacity(n);
-
-    // Gravity timings
     const tTree0 = performance.now();
     const root = buildQuadTree(active);
     const tTree1 = performance.now();
     const treeMs = tTree1 - tTree0;
+
+    const ax = new Float32Array(n);
+    const ay = new Float32Array(n);
 
     const tForce0 = performance.now();
     for (let i = 0; i < n; i++) {
@@ -575,12 +514,10 @@
     const tForce1 = performance.now();
     lastGravMs = treeMs + (tForce1 - tForce0);
 
-    // Integration
     const tInt0 = performance.now();
     for (let i = 0; i < n; i++) {
       const b = active[i];
 
-      // Thrusters on selected body
       let addAX = 0, addAY = 0;
       if (selectedId && b.id === selectedId) {
         let dx = 0, dy = 0;
@@ -605,110 +542,144 @@
     const tInt1 = performance.now();
     lastIntegrateMs = tInt1 - tInt0;
 
-    // Broad phase with buckets (reused)
-    const tColl0 = performance.now();
+    // collisions handled elsewhere
+    lastCollideMs = lastCollideMs; // keep last measured response time
 
-    // Clear all bucket arrays instead of creating new ones
-    for (const arr of buckets.values()) {
-      arr.length = 0;
+    return { active };
+  }
+
+  // Helper: collect active bodies for snapshot (post-integration)
+  function collectActiveBodies(viewBounds) {
+    const { x0, y0, x1, y1 } = viewBounds;
+    const active = [];
+    for (const b of bodies.values()) {
+      if (!b.alive) continue;
+      if (b.x + b.rWorld < x0 || b.y + b.rWorld < y0 ||
+          b.x - b.rWorld > x1 || b.y - b.rWorld > y1) continue;
+      active.push(b);
+    }
+    return active;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // 11) Worker-based collision detection pipeline (Option A, detection only)
+  // ─────────────────────────────────────────────────────────────────────────────
+  let collisionWorker = null;
+  let collisionInFlight = false;
+  let collisionJobCounter = 0;
+
+  let pendingCollisionJob = null; // { pairs, bodies, dt }
+  let currentJobBodies = null;
+  let currentJobDt = 0;
+
+  if (window.Worker) {
+    try {
+      collisionWorker = new Worker('collideWorker.js');
+      collisionWorker.onmessage = (e) => {
+        const { jobId, pairs } = e.data;
+        // Job IDs let us debug if needed; we only allow one in-flight anyway
+        collisionInFlight = false;
+        if (!currentJobBodies) return; // nothing to apply into
+        pendingCollisionJob = {
+          pairs,
+          bodies: currentJobBodies,
+          dt: currentJobDt
+        };
+        currentJobBodies = null;
+        currentJobDt = 0;
+      };
+    } catch (err) {
+      console.warn('Failed to start collide worker:', err);
+      collisionWorker = null;
+    }
+  }
+
+  function startCollisionJob(activeBodies, dt) {
+    if (!collisionWorker || collisionInFlight) return;
+    const count = activeBodies.length;
+    if (count === 0 || dt <= 0) return;
+
+    const xs = new Float32Array(count);
+    const ys = new Float32Array(count);
+    const rs = new Float32Array(count);
+
+    for (let i = 0; i < count; i++) {
+      const b = activeBodies[i];
+      xs[i] = b.x;
+      ys[i] = b.y;
+      rs[i] = b.rWorld;
+      b.collCount = 0; // reset per-job counter
     }
 
-    // We do NOT clear ranges; rangeForBody reuses/updates objects per body ID.
+    currentJobBodies = activeBodies.slice(); // snapshot of body refs
+    currentJobDt = dt;
 
-    function insertBodyIntoBuckets(body) {
-      const r = rangeForBody(body);
-      for (let cy = r.cy0; cy <= r.cy1; cy++) {
-        for (let cx = r.cx0; cx <= r.cx1; cx++) {
-          const key = bkKey(cx, cy);
-          let arr = buckets.get(key);
-          if (!arr) {
-            arr = [];
-            buckets.set(key, arr);
-          }
-          arr.push(body.id);
-        }
+    const jobId = ++collisionJobCounter;
+    collisionInFlight = true;
+    collisionWorker.postMessage(
+      { jobId, xs, ys, rs, count },
+      [xs.buffer, ys.buffer, rs.buffer]
+    );
+  }
+
+  function applyPendingCollisions() {
+    if (!pendingCollisionJob) return;
+    const t0 = performance.now();
+
+    const { pairs, bodies: jobBodies, dt } = pendingCollisionJob;
+    pendingCollisionJob = null;
+
+    if (!pairs || !jobBodies || dt <= 0) return;
+
+    const len = pairs.length;
+    const pairCount = len >>> 1;
+    if (pairCount === 0) {
+      lastCollideMs = 0;
+      return;
+    }
+
+    // Process all pairs: update collCount, then resolve collisions/merges
+    for (let k = 0; k < len; k += 2) {
+      const i = pairs[k];
+      const j = pairs[k + 1];
+      const a = jobBodies[i];
+      const b = jobBodies[j];
+      if (!a || !b) continue;
+      if (!a.alive || !b.alive) continue;
+      if (a === b) continue;
+
+      a.collCount = (a.collCount || 0) + 1;
+      b.collCount = (b.collCount || 0) + 1;
+
+      const stickyA = (a.emaCps || 0) >= STICKY_THR;
+      const stickyB = (b.emaCps || 0) >= STICKY_THR;
+      const wantMerge = MERGE_ON && stickyA && stickyB;
+
+      if (wantMerge) {
+        // Approximation: merged body will only participate in collisions next frame
+        mergeBodies(a, b);
+      } else {
+        resolveCollisionNoMerge(a, b);
       }
     }
 
-    for (const b of active) {
-      // compute & store range, and fill buckets
-      insertBodyIntoBuckets(b);
-    }
-
-    function isCanonicalBucket(cx, cy, rA, rB) {
-      const cxCanon = Math.max(rA.cx0, rB.cx0);
-      const cyCanon = Math.max(rA.cy0, rB.cy0);
-      return cx === cxCanon && cy === cyCanon;
-    }
-
-    // Narrow phase
-    for (const [key, arr] of buckets) {
-      const cx = Math.floor(key / BUCKET_STRIDE);
-      const cy = key - cx * BUCKET_STRIDE;
-
-      for (let i = 0; i < arr.length; i++) {
-        let idA = arr[i];
-        let a = bodies.get(idA);
-        if (!a) continue;
-
-        for (let j = i + 1; j < arr.length; j++) {
-          const idB = arr[j];
-          const b = bodies.get(idB);
-          if (!b || idA === idB) continue;
-
-          const rA = ranges.get(idA);
-          const rB = ranges.get(idB);
-          if (!rA || !rB) continue;
-
-          if (!isCanonicalBucket(cx, cy, rA, rB)) continue;
-
-          const dx = b.x - a.x;
-          const dy = b.y - a.y;
-          const sumR = a.rWorld + b.rWorld;
-          if (dx*dx + dy*dy <= sumR*sumR) {
-            // Count this collision for EMA (both bodies)
-            a.collCount = (a.collCount || 0) + 1;
-            b.collCount = (b.collCount || 0) + 1;
-
-            // Sticky logic: BOTH bodies must exceed STICKY_THR and merging must be enabled
-            const stickyA = (a.emaCps || 0) >= STICKY_THR;
-            const stickyB = (b.emaCps || 0) >= STICKY_THR;
-            const wantMerge = MERGE_ON && stickyA && stickyB;
-
-            if (wantMerge) {
-              const merged = mergeBodies(a, b);
-              ranges.delete(idA);
-              ranges.delete(idB);
-              insertBodyIntoBuckets(merged);
-              idA = merged.id;
-              a = merged;
-              arr[i] = idA;
-              j = i; // restart comparisons for this i with the merged body
-            } else {
-              // Bounce (no unconditional merging anymore)
-              resolveCollisionNoMerge(a, b);
-            }
-          }
-        }
-      }
-    }
-
-    const tColl1 = performance.now();
-    lastCollideMs = tColl1 - tColl0;
-
-    // Update EMA CPS for all active bodies
+    // Update EMA CPS based on this job's dt
     if (dt > 0) {
       const alpha = 1 - Math.exp(-dt / EMA_TAU);
-      for (const b of active) {
+      for (const b of jobBodies) {
+        if (!b || !b.alive) continue;
         const inst = (b.collCount || 0) / dt;
         b.emaCps = (b.emaCps || 0) + alpha * (inst - (b.emaCps || 0));
         b.collCount = 0;
       }
     }
+
+    const t1 = performance.now();
+    lastCollideMs = t1 - t0;
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 11) Spawn delta logic (newly revealed cells only)
+  // 12) Spawn delta logic (unchanged)
   // ─────────────────────────────────────────────────────────────────────────────
   let prevX0 = null, prevY0 = null, prevX1 = null, prevY1 = null;
 
@@ -740,28 +711,28 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 12) Render
+  // 13) Render
   // ─────────────────────────────────────────────────────────────────────────────
   function render() {
     if (!needsRender) return;
     needsRender = false;
 
+    // Apply collisions from the previous frame's snapshot (one-frame lag)
+    applyPendingCollisions();
+
     const t0 = performance.now();
     const w = canvas.width, h = canvas.height;
 
-    // Clear
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, w, h);
 
-    // Visible bounds
     const x0 = Math.max(0, Math.floor(viewX));
     const y0 = Math.max(0, Math.floor(viewY));
     const x1 = Math.min(WORLD_SIZE, Math.ceil(viewX + w / scale));
     const y1 = Math.min(WORLD_SIZE, Math.ceil(viewY + h / scale));
     const viewBounds = { x0, y0, x1, y1 };
 
-    // Frame dt for controls
     const now = performance.now() * 0.001;
     let dtFrame = 0;
     if (lastFrameTime == null) lastFrameTime = now;
@@ -769,7 +740,6 @@
 
     const active = simActive();
 
-    // Spawn
     if (active) {
       const tSpawn0 = performance.now();
       spawnNewlyRevealed(viewBounds);
@@ -779,21 +749,25 @@
       lastSimTime = null;
       lastGravMs = 0;
       lastIntegrateMs = 0;
-      lastCollideMs = 0;
+      lastCollideMs = lastCollideMs; // keep last
       lastSpawnMs = 0;
       prevX0 = prevY0 = prevX1 = prevY1 = null;
     }
 
-    // Physics step
     let dt = 0;
     if (active) {
       const nowS = performance.now() * 0.001;
       if (lastSimTime == null) lastSimTime = nowS;
       else { dt = Math.min(MAX_DT, Math.max(0, nowS - lastSimTime)); lastSimTime = nowS; }
-      if (dt > 0) simulate(dt, viewBounds);
+      if (dt > 0) {
+        simulate(dt, viewBounds);
+        // After integration, kick off a collision detection job if none in flight
+        const activeBodiesForJob = collectActiveBodies(viewBounds);
+        startCollisionJob(activeBodiesForJob, dt);
+      }
     } else if (selectedId && (keyW || keyA || keyS || keyD)) {
       const b = bodies.get(selectedId);
-      if (b) {
+      if (b && b.alive) {
         let dx = 0, dy = 0;
         if (keyA) dx -= 1; if (keyD) dx += 1;
         if (keyW) dy -= 1; if (keyS) dy += 1;
@@ -809,10 +783,9 @@
       }
     }
 
-    // Camera follow
     if (followSelected && selectedId) {
       const b = bodies.get(selectedId);
-      if (b) {
+      if (b && b.alive) {
         const vw = viewportWorldWidth();
         const vh = viewportWorldHeight();
         viewX = b.x - vw / 2;
@@ -821,10 +794,10 @@
       }
     }
 
-    // Draw bodies
     const tDraw0 = performance.now();
     ctx.beginPath();
     for (const b of bodies.values()) {
+      if (!b.alive) continue;
       const cx = (b.x - viewX) * scale;
       const cy = (b.y - viewY) * scale;
       const rpx = b.rWorld * scale;
@@ -835,10 +808,9 @@
     ctx.fillStyle = '#fff';
     ctx.fill();
 
-    // Highlight selected
     if (selectedId) {
       const b = bodies.get(selectedId);
-      if (b) {
+      if (b && b.alive) {
         const cx = (b.x - viewX) * scale;
         const cy = (b.y - viewY) * scale;
         const rpx = b.rWorld * scale;
@@ -849,7 +821,6 @@
           ctx.strokeStyle = '#33aaff';
           ctx.stroke();
         }
-        // Optional: show selected emaCps if a HUD span exists
         if (emaVal) emaVal.textContent = (b.emaCps || 0).toFixed(1) + ' cps';
       } else {
         selectedId = null;
@@ -859,7 +830,6 @@
     const tDraw1 = performance.now();
     lastRenderMs = tDraw1 - tDraw0;
 
-    // HUD
     const t1 = performance.now();
     lastTotalMs = t1 - t0;
     if ((hudCounter = (hudCounter + 1) % 6) === 0) {
@@ -888,7 +858,7 @@
         perfVal.textContent =
           `Grav ${lastGravMs.toFixed(1)} ms | ` +
           `Spawn ${lastSpawnMs.toFixed(1)} ms | ` +
-          `Collide ${lastCollideMs.toFixed(1)} ms | ` +
+          `Collide ${lastCollideMs.toFixed(1)} ms | ` + // response only
           `Integr ${lastIntegrateMs.toFixed(1)} ms | ` +
           `Render ${lastRenderMs.toFixed(1)} ms | ` +
           `Total ${lastTotalMs.toFixed(1)} ms`;
@@ -897,7 +867,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 13) Sizing
+  // 14) Sizing
   // ─────────────────────────────────────────────────────────────────────────────
   function resizeCanvas() {
     const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
@@ -910,12 +880,13 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 14) Picking & input
+  // 15) Picking & input (unchanged)
   // ─────────────────────────────────────────────────────────────────────────────
   function pickBodyAt(worldX, worldY) {
     let best = null;
     let bestD2 = Infinity;
     for (const b of bodies.values()) {
+      if (!b.alive) continue;
       const dx = worldX - b.x;
       const dy = worldY - b.y;
       const rPick = Math.max(b.rWorld, MIN_CLICK_RADIUS);
@@ -1009,7 +980,7 @@
   window.addEventListener('keyup',   (e) => handleKey(e, false), { passive: false });
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 15) HUD controls (only attach if present)
+  // 16) HUD controls (unchanged)
   // ─────────────────────────────────────────────────────────────────────────────
   function updateG(newG) {
     G = Math.min(G_MAX, Math.max(G_MIN, newG));
@@ -1063,7 +1034,6 @@
   if (biasMinusBtn) biasMinusBtn.addEventListener('click', () => updateBias(SIZE_BIAS / BIAS_STEP));
   if (biasPlusBtn)  biasPlusBtn .addEventListener('click', () => updateBias(SIZE_BIAS * BIAS_STEP));
 
-  // Merge HUD
   function setMergeOn(v) { MERGE_ON = !!v; if (mergeVal) mergeVal.textContent = fmtBool(MERGE_ON); }
   if (mergeToggle) mergeToggle.addEventListener('click', () => setMergeOn(!MERGE_ON));
 
@@ -1079,7 +1049,6 @@
   if (muMinus) muMinus.addEventListener('click', () => setMu(FRICTION_MU / FRICT_STEP));
   if (muPlus)  muPlus .addEventListener('click', () => setMu(FRICTION_MU * FRICT_STEP));
 
-  // Crush HUD
   function setMC(newMC) { CRUSH_MC = Math.min(CRUSH_MC_MAX, Math.max(CRUSH_MC_MIN, newMC)); if (mcVal) mcVal.textContent = CRUSH_MC.toFixed(0); requestRender(); }
   function setK(newK)   { CRUSH_K  = Math.min(CRUSH_K_MAX,  Math.max(CRUSH_K_MIN,  newK));   if (kVal)  kVal.textContent  = fmtFloat(CRUSH_K);   requestRender(); }
   if (mcMinus) mcMinus.addEventListener('click', () => setMC(CRUSH_MC - 10));
@@ -1087,7 +1056,6 @@
   if (kMinus)  kMinus .addEventListener('click', () => setK(CRUSH_K / 1.2));
   if (kPlus)   kPlus  .addEventListener('click', () => setK(CRUSH_K * 1.2));
 
-  // Band bias HUD
   function setBandH(v) { VBIAS_BAND_H = Math.max(1, Math.min(1000000, v)); if (bandVal) bandVal.textContent = VBIAS_BAND_H.toFixed(0); }
   function setVbias(v) { VBIAS_ADD = v; if (vbiasVal) vbiasVal.textContent = fmtFloat(VBIAS_ADD); }
   if (bandMinus) bandMinus.addEventListener('click', () => setBandH(VBIAS_BAND_H / 1.1));
@@ -1096,7 +1064,7 @@
   if (vbiasPlus)  vbiasPlus .addEventListener('click', () => setVbias(VBIAS_ADD * 1.1));
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 16) Bootstrap & tick
+  // 17) Bootstrap & tick
   // ─────────────────────────────────────────────────────────────────────────────
   window.addEventListener('resize', resizeCanvas);
   resizeCanvas();
