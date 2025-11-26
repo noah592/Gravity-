@@ -17,7 +17,7 @@
   const G_MIN = 1e-6, G_MAX = 1e6;
   const G_STEP = 1.1;
   const SOFTENING2 = 0.15;
-  const MAX_DT = 1 / 60; // your current experiment
+  const MAX_DT = 1 / 60; // back to 60 Hz
 
   // Barnes–Hut
   const THETA = 1.0;
@@ -70,7 +70,7 @@
   const MIN_CLICK_AREA = 5;
   const MIN_CLICK_RADIUS = Math.sqrt(MIN_CLICK_AREA / Math.PI);
 
-  // Spatial hashing constants (mirrored by worker)
+  // Spatial hashing constants (main & worker agree on WORLD_SIZE / BUCKET_SIZE)
   const BUCKET_SIZE = 2.0;
   const MAX_CX = Math.floor(WORLD_SIZE / BUCKET_SIZE);
   const MAX_CY = Math.floor(WORLD_SIZE / BUCKET_SIZE);
@@ -270,7 +270,9 @@
       sources: [nk],
       emaCps: 0,
       collCount: 0,
-      alive: true
+      alive: true,
+      axG: 0,
+      ayG: 0
     });
     activatedCells.add(nk);
   }
@@ -301,7 +303,9 @@
       sources,
       emaCps: (bi.emaCps * bi.m + bj.emaCps * bj.m) / (mSum || 1),
       collCount: 0,
-      alive: true
+      alive: true,
+      axG: (bi.axG * bi.m + bj.axG * bj.m) / (mSum || 1),
+      ayG: (bi.ayG * bi.m + bj.ayG * bj.m) / (mSum || 1)
     };
 
     if (selectedId === bi.id || selectedId === bj.id) selectedId = id;
@@ -508,6 +512,13 @@
     for (let i = 0; i < n; i++) {
       const b = active[i];
 
+      // gravity-only acceleration (no collision impulses)
+      const gx = ax[i];
+      const gy = ay[i];
+      b.axG = gx;
+      b.ayG = gy;
+
+      // Thrusters on selected body
       let addAX = 0, addAY = 0;
       if (selectedId && b.id === selectedId) {
         let dx = 0, dy = 0;
@@ -524,8 +535,8 @@
         }
       }
 
-      b.vx += (ax[i] + addAX) * dt;
-      b.vy += (ay[i] + addAY) * dt;
+      b.vx += (gx + addAX) * dt;
+      b.vy += (gy + addAY) * dt;
       b.x  += b.vx * dt;
       b.y  += b.vy * dt;
     }
@@ -548,7 +559,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 11) Worker-based collision detection (with constant-velocity prediction)
+  // 11) Worker-based collision detection (constant-accel prediction)
   // ─────────────────────────────────────────────────────────────────────────────
   let collisionWorker = null;
   let collisionInFlight = false;
@@ -589,6 +600,8 @@
     const rs  = new Float32Array(count);
     const vxs = new Float32Array(count);
     const vys = new Float32Array(count);
+    const axs = new Float32Array(count);
+    const ays = new Float32Array(count);
 
     for (let i = 0; i < count; i++) {
       const b = activeBodies[i];
@@ -597,6 +610,8 @@
       rs[i]  = b.rWorld;
       vxs[i] = b.vx;
       vys[i] = b.vy;
+      axs[i] = b.axG || 0;
+      ays[i] = b.ayG || 0;
       b.collCount = 0;
     }
 
@@ -606,8 +621,8 @@
     const jobId = ++collisionJobCounter;
     collisionInFlight = true;
     collisionWorker.postMessage(
-      { jobId, xs, ys, rs, vxs, vys, dt, count },
-      [xs.buffer, ys.buffer, rs.buffer, vxs.buffer, vys.buffer]
+      { jobId, xs, ys, rs, vxs, vys, axs, ays, dt, count },
+      [xs.buffer, ys.buffer, rs.buffer, vxs.buffer, vys.buffer, axs.buffer, ays.buffer]
     );
   }
 
@@ -752,8 +767,10 @@
       const b = bodies.get(selectedId);
       if (b && b.alive) {
         let dx = 0, dy = 0;
-        if (keyA) dx -= 1; if (keyD) dx += 1;
-        if (keyW) dy -= 1; if (keyS) dy += 1;
+        if (keyA) dx -= 1;
+        if (keyD) dx += 1;
+        if (keyW) dy -= 1;
+        if (keyS) dy += 1;
         if (dx !== 0 || dy !== 0) {
           const inv = 1 / Math.hypot(dx, dy);
           dx *= inv; dy *= inv;
@@ -1096,4 +1113,3 @@
     requestAnimationFrame(tick);
   })();
 })();
-
