@@ -17,11 +17,10 @@
   const G_MIN = 1e-6, G_MAX = 1e6;
   const G_STEP = 1.1;
   const SOFTENING2 = 0.15;
-  const MAX_DT = 1 / 60; // back to 60 Hz
+  const MAX_DT = 1 / 60; // 60 Hz
 
   // Barnes–Hut
   const THETA = 1.0;
-  const LEAF_CAPACITY = 1;
 
   // Visual base radius; baseline r = BASE_R_WORLD * sqrt(m)
   const BASE_R_WORLD = 0.45;
@@ -70,7 +69,7 @@
   const MIN_CLICK_AREA = 5;
   const MIN_CLICK_RADIUS = Math.sqrt(MIN_CLICK_AREA / Math.PI);
 
-  // Spatial hashing constants (main & worker agree on WORLD_SIZE / BUCKET_SIZE)
+  // Spatial hashing constants (used in main for view culling only)
   const BUCKET_SIZE = 2.0;
   const MAX_CX = Math.floor(WORLD_SIZE / BUCKET_SIZE);
   const MAX_CY = Math.floor(WORLD_SIZE / BUCKET_SIZE);
@@ -196,6 +195,10 @@
   // ─────────────────────────────────────────────────────────────────────────────
   // 6) Bodies & cells
   // ─────────────────────────────────────────────────────────────────────────────
+  /**
+   * Body fields:
+   *  id, x, y, vx, vy, m, rWorld, sources[], emaCps, collCount, alive
+   */
   const bodies = new Map();
   const activatedCells = new Set();
   const consumedCells  = new Set();
@@ -270,14 +273,14 @@
       sources: [nk],
       emaCps: 0,
       collCount: 0,
-      alive: true,
-      axG: 0,
-      ayG: 0
+      alive: true
     });
     activatedCells.add(nk);
   }
 
   function mergeBodies(bi, bj) {
+    if (!bi.alive || !bj.alive) return bi; // safety
+
     bi.alive = false;
     bj.alive = false;
 
@@ -303,9 +306,7 @@
       sources,
       emaCps: (bi.emaCps * bi.m + bj.emaCps * bj.m) / (mSum || 1),
       collCount: 0,
-      alive: true,
-      axG: (bi.axG * bi.m + bj.axG * bj.m) / (mSum || 1),
-      ayG: (bi.ayG * bi.m + bj.ayG * bj.m) / (mSum || 1)
+      alive: true
     };
 
     if (selectedId === bi.id || selectedId === bj.id) selectedId = id;
@@ -470,7 +471,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 10) Simulation (forces + integration)
+  // 10) Simulation (forces + integration, no collisions)
   // ─────────────────────────────────────────────────────────────────────────────
   function simulate(dt, viewBounds) {
     const { x0, y0, x1, y1 } = viewBounds;
@@ -512,13 +513,6 @@
     for (let i = 0; i < n; i++) {
       const b = active[i];
 
-      // gravity-only acceleration (no collision impulses)
-      const gx = ax[i];
-      const gy = ay[i];
-      b.axG = gx;
-      b.ayG = gy;
-
-      // Thrusters on selected body
       let addAX = 0, addAY = 0;
       if (selectedId && b.id === selectedId) {
         let dx = 0, dy = 0;
@@ -535,8 +529,8 @@
         }
       }
 
-      b.vx += (gx + addAX) * dt;
-      b.vy += (gy + addAY) * dt;
+      b.vx += (ax[i] + addAX) * dt;
+      b.vy += (ay[i] + addAY) * dt;
       b.x  += b.vx * dt;
       b.y  += b.vy * dt;
     }
@@ -559,7 +553,7 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // 11) Worker-based collision detection (constant-accel prediction)
+  // 11) Worker-based collision detection (no prediction)
   // ─────────────────────────────────────────────────────────────────────────────
   let collisionWorker = null;
   let collisionInFlight = false;
@@ -595,23 +589,15 @@
     const count = activeBodies.length;
     if (count === 0 || dt <= 0) return;
 
-    const xs  = new Float32Array(count);
-    const ys  = new Float32Array(count);
-    const rs  = new Float32Array(count);
-    const vxs = new Float32Array(count);
-    const vys = new Float32Array(count);
-    const axs = new Float32Array(count);
-    const ays = new Float32Array(count);
+    const xs = new Float32Array(count);
+    const ys = new Float32Array(count);
+    const rs = new Float32Array(count);
 
     for (let i = 0; i < count; i++) {
       const b = activeBodies[i];
-      xs[i]  = b.x;
-      ys[i]  = b.y;
-      rs[i]  = b.rWorld;
-      vxs[i] = b.vx;
-      vys[i] = b.vy;
-      axs[i] = b.axG || 0;
-      ays[i] = b.ayG || 0;
+      xs[i] = b.x;
+      ys[i] = b.y;
+      rs[i] = b.rWorld;
       b.collCount = 0;
     }
 
@@ -621,23 +607,28 @@
     const jobId = ++collisionJobCounter;
     collisionInFlight = true;
     collisionWorker.postMessage(
-      { jobId, xs, ys, rs, vxs, vys, axs, ays, dt, count },
-      [xs.buffer, ys.buffer, rs.buffer, vxs.buffer, vys.buffer, axs.buffer, ays.buffer]
+      { jobId, xs, ys, rs, count },
+      [xs.buffer, ys.buffer, rs.buffer]
     );
   }
 
   function applyPendingCollisions() {
-    if (!pendingCollisionJob) return;
+    if (!pendingCollisionJob) {
+      lastCollideMs = 0;
+      return;
+    }
     const t0 = performance.now();
 
     const { pairs, bodies: jobBodies, dt } = pendingCollisionJob;
     pendingCollisionJob = null;
 
-    if (!pairs || !jobBodies || dt <= 0) return;
+    if (!pairs || !jobBodies || dt <= 0) {
+      lastCollideMs = 0;
+      return;
+    }
 
     const len = pairs.length;
-    const pairCount = len >>> 1;
-    if (pairCount === 0) {
+    if (!len) {
       lastCollideMs = 0;
       return;
     }
@@ -718,6 +709,7 @@
     if (!needsRender) return;
     needsRender = false;
 
+    // 1) Apply collisions from previous step (job for dt_{n-1})
     applyPendingCollisions();
 
     const t0 = performance.now();
@@ -759,7 +751,10 @@
       if (lastSimTime == null) lastSimTime = nowS;
       else { dt = Math.min(MAX_DT, Math.max(0, nowS - lastSimTime)); lastSimTime = nowS; }
       if (dt > 0) {
+        // 2) Advance gravity/integration for this step n
         simulate(dt, viewBounds);
+
+        // 3) Kick off collision detection for step n in the worker
         const activeBodiesForJob = collectActiveBodies(viewBounds);
         startCollisionJob(activeBodiesForJob, dt);
       }
